@@ -6,11 +6,11 @@ library descriptor.git;
 
 import 'dart:async';
 
+import 'package:pub/src/git.dart' as git;
 import 'package:path/path.dart' as path;
 import 'package:scheduled_test/scheduled_test.dart';
 import 'package:scheduled_test/descriptor.dart';
 
-import '../../lib/src/git.dart' as git;
 
 /// Describes a Git repository and its contents.
 class GitRepoDescriptor extends DirectoryDescriptor {

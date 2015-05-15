@@ -8,13 +8,13 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:pub/src/utils.dart';
 import 'package:http/http.dart' as http;
 import 'package:scheduled_test/scheduled_process.dart';
 import 'package:scheduled_test/scheduled_stream.dart';
 import 'package:scheduled_test/scheduled_test.dart';
 import 'package:stack_trace/stack_trace.dart';
 
-import '../../lib/src/utils.dart';
 import '../descriptor.dart' as d;
 import '../test_pub.dart';
 
