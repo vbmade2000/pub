@@ -26,7 +26,7 @@ class ConstraintMaximizer {
     // [this algorithm]: https://gist.github.com/nex3/f4d0e2a9267d1b8cfdb5132b760d0111#gistcomment-1782883
     var flattened = <VersionRange>[];
     for (var constraint in constraints) {
-      if (constraints is VersionUnion) {
+      if (constraint is VersionUnion) {
         flattened.addAll(constraint.ranges.map(_normalize));
       } else {
         flattened.add(_normalize(constraint as VersionRange));
@@ -38,11 +38,16 @@ class ConstraintMaximizer {
 
   /// Normalize [range] so that it encodes the next upper bound.
   VersionRange _normalize(VersionRange range) {
-    if (_normalized[range]) return range;
+    if (_normalized[range] ?? false) return range;
     if (range.max == null) {
       _normalized[range] = true;
       return range;
     }
+
+    // TODO(nweiz): It may be more user-friendly to avoid normalizing individual
+    // versions here, so the user sees messages about "foo 1.2.3" rather than
+    // "foo >=1.2.3 <1.2.4". That would require more logic in [maximize] to
+    // merge those versions, though.
 
     // Convert the upper bound to `<V`, where V is in [_versions]. This makes
     // the range look more like a caret-style version range and implicitly
