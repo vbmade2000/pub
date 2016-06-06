@@ -7,8 +7,35 @@ import 'package:pub_semver/pub_semver.dart';
 
 /// Merges constraints such that they fully cover actual available versions.
 ///
-/// See https://gist.github.com/nex3/f4d0e2a9267d1b8cfdb5132b760d0111.
+/// Thoroughly explaining what this means will require a bit of jargon, so bear
+/// with me. I promise not to use any technical terms without defining them
+/// first.
+///
+/// Suppose we're given a set of known [Version]s, which we'll call a **base**.
+/// We define two [VersionConstraint]s to be **equivalent** relative to a base
+/// if they cover exactly the same versions in the base. For example, if the
+/// base is `[1.0.0, 2.0.0, 3.0.0]`, then the ranges `^1.0.0` and `>=1.0.0
+/// <1.5.0` are equivalent.
+///
+/// We'll also define a version constraint to be **maximal** relative to a base
+/// if there are no equivalent constraints with fewer ranges. [Version]s and
+/// [VersionRange]s have only one range (themselves); a [VersionUnion] has
+/// `ranges.length` ranges. So for example, `^1.0.0` is maximal relative to the
+/// base above, but `">=1.0.0 <1.5.0" or ">=1.6.0 <2.0.0"` is not because it
+/// contains more ranges than necessary.
+///
+/// This class finds maximal equivalents for sets of [VersionConstraint]s. This
+/// is important for version solving because it means that we can safely take
+/// the difference of two version constraints without having useless gaps left
+/// over. It also makes the output more human-friendly, since we can talk about
+/// adjacent versions as ranges instead of individual versions.
+///
+/// Each [ConstraintMaximizer] maximizes constraints for one particular package
+/// and its set of versions.
 class ConstraintMaximizer {
+  /// The set of concrete versions of the package that actually exist.
+  ///
+  /// This is the base relative to which maximality is defined.
   final List<Version> _versions;
 
   // Indices
