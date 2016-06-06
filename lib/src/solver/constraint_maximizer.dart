@@ -38,14 +38,24 @@ class ConstraintMaximizer {
   /// This is the base relative to which maximality is defined.
   final List<Version> _versions;
 
-  // Indices
+  // Indices of the least upper bound in [_versions] for version numbers we've
+  // encountered.
+  //
+  // Caching these allows us to avoid doing a binary search through a
+  // potentially-large version list when re-processing the same constraints. The
+  // index `_versions.length` indicates that a version is greater than or equal
+  // to all versions in [_versions].
   final _leastUpperBounds = <Version, int>{};
 
+  /// An expando tracking [VersionRange]s that have been normalized using
+  /// [_normalize].
   final _normalized = new Expando<bool>();
 
-  ConstraintMaximizer(Iterable<Version> versions)
-      : _versions = versions.toList();
+  ConstraintMaximizer(Iterable<Version> base)
+      : _versions = base.toList();
 
+  /// Returns a maximal [VersionConstraint] equivalent to the union of
+  /// [constraints].
   VersionConstraint maximize(Iterable<VersionConstraint> constraints) {
     // TODO(nweiz): if there end up being a lot of constraints per union, we can
     // avoid re-sorting them using [this algorithm][].
@@ -64,6 +74,10 @@ class ConstraintMaximizer {
   }
 
   /// Normalize [range] so that it encodes the next upper bound.
+  ///
+  /// If [range] has an upper bound, this adjusts it so that it's of the form
+  /// `<V` where `V` is a version in the base. The returned range is equivalent
+  /// to [range].
   VersionRange _normalize(VersionRange range) {
     if (_normalized[range] ?? false) return range;
     if (range.max == null) {
@@ -76,9 +90,8 @@ class ConstraintMaximizer {
     // "foo >=1.2.3 <1.2.4". That would require more logic in [maximize] to
     // merge those versions, though.
 
-    // Convert the upper bound to `<V`, where V is in [_versions]. This makes
-    // the range look more like a caret-style version range and implicitly
-    // tracks the upper bound.
+    // This makes the range look more like a caret-style version range and
+    // implicitly tracks the upper bound.
     var result = new VersionRange(
         min: range.min, max: _strictLeastUpperBound(range),
         includeMin: range.includeMin, includeMax: false);
@@ -86,7 +99,8 @@ class ConstraintMaximizer {
     return result;
   }
 
-  // Strictly greater than
+  /// Returns the lowest version in [_versions] that's strictly greater than all
+  /// versions in [range].
   Version _strictLeastUpperBound(VersionRange range) {
     var index = _leastUpperBoundIndex(range.max);
     if (index == _versions.length) return null;
@@ -97,7 +111,11 @@ class ConstraintMaximizer {
     return _versions[index + 1];
   }
 
-  // Greater than or equal to, `versions.length` if none
+  /// Returns the index of the least version in [_versions] that's greater than
+  /// or equal to [version].
+  ///
+  /// If [version] is greater than all versions in [_versions], returns
+  /// `_versions.length`.
   int _leastUpperBoundIndex(Version version) {
     // TODO(nweiz): tweak the binary search to favor the latter end of
     // [_versions]?
