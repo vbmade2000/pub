@@ -44,10 +44,12 @@ import '../log.dart' as log;
 import '../package.dart';
 import '../pubspec.dart';
 import '../sdk.dart' as sdk;
-import '../source_registry.dart';
 import '../source/hosted.dart';
 import '../source/unknown.dart';
+import '../source_registry.dart';
 import '../utils.dart';
+import 'deducer.dart';
+import 'fact.dart' as fact;
 import 'version_queue.dart';
 import 'version_selection.dart';
 import 'version_solver.dart';
@@ -114,6 +116,8 @@ class BacktrackingSolver {
   /// not.
   VersionSelection _selection;
 
+  final _deducer = new Deducer();
+
   /// The number of solutions the solver has tried so far.
   var _attemptedSolutions = 1;
 
@@ -135,6 +139,8 @@ class BacktrackingSolver {
     _selection = new VersionSelection(this);
 
     for (var package in useLatest) {
+      // TODO: we should add a fact here, but how do we do that when we don't
+      // know the source?
       _forceLatest.add(package);
     }
 
@@ -161,9 +167,11 @@ class BacktrackingSolver {
 
       // Pre-cache the root package's known pubspec.
       var rootID = new PackageId.root(root);
+      _deducer.setAllIds([rootID]);
+      _deducer.add(new fact.Required(rootID.withConstraint(rootID.version)));
       await _selection.select(rootID);
 
-      _validateSdkConstraint(root.pubspec);
+      _validateSdkConstraint(rootID, root.pubspec);
 
       logSolve();
       var packages = await _solve();
@@ -342,6 +350,7 @@ class BacktrackingSolver {
     var allowed;
     try {
       allowed = await cache.getVersions(ref);
+      _deducer.setAllIds(allowed);
     } on PackageNotFoundException catch (error) {
       // Show the user why the package was being requested.
       throw new DependencyNotFoundException(
@@ -422,7 +431,7 @@ class BacktrackingSolver {
   ///
   /// If the first version is valid, no rewinding will be done. If no version is
   /// valid, this throws a [SolveFailure] explaining why.
-  Future _findValidVersion(VersionQueue queue) {
+  Future _findValidVersion(VersionQueue queue) async {
     // TODO(nweiz): Use real while loops when issue 23394 is fixed.
     return Future.doWhile(() async {
       try {
@@ -456,9 +465,9 @@ class BacktrackingSolver {
     var constraint = _selection.getConstraint(id.name);
     if (!constraint.allows(id.version)) {
       var deps = _selection.getDependenciesOn(id.name);
-
       for (var dep in deps) {
         if (dep.dep.constraint.allows(id.version)) continue;
+        _deducer.add(_dependencyToFact(dep));
         _fail(dep.depender.name);
       }
 
@@ -475,10 +484,12 @@ class BacktrackingSolver {
     } on PackageNotFoundException {
       // We can only get here if the lockfile refers to a specific package
       // version that doesn't exist (probably because it was yanked).
+      _deducer.add(new fact.Disallowed(
+          id.withConstraint(id.version), [fact.Cause.noVersion]));
       throw new NoVersionException(id.name, null, id.version, []);
     }
 
-    _validateSdkConstraint(pubspec);
+    _validateSdkConstraint(id, pubspec);
 
     for (var dep in await depsFor(id)) {
       if (dep.isMagic) continue;
@@ -489,8 +500,11 @@ class BacktrackingSolver {
 
       var depConstraint = _selection.getConstraint(dep.name);
       if (!depConstraint.allowsAny(dep.constraint)) {
+        _deducer.add(_dependencyToFact(dependency));
+
         for (var otherDep in _selection.getDependenciesOn(dep.name)) {
           if (otherDep.dep.constraint.allowsAny(dep.constraint)) continue;
+          _deducer.add(_dependencyToFact(otherDep));
           _fail(otherDep.depender.name);
         }
 
@@ -503,6 +517,7 @@ class BacktrackingSolver {
 
       var selected = _selection.selected(dep.name);
       if (selected != null && !dep.constraint.allows(selected.version)) {
+        _deducer.add(_dependencyToFact(dependency));
         _fail(dep.name);
 
         logSolve(
@@ -517,9 +532,12 @@ class BacktrackingSolver {
       if (required == null) continue;
 
       if (dep.source != required.dep.source) {
+        _deducer.add(_dependencyToFact(dependency));
+
         // Mark the dependers as failing rather than the package itself, because
         // no version from this source will be compatible.
         for (var otherDep in _selection.getDependenciesOn(dep.name)) {
+          _deducer.add(_dependencyToFact(otherDep));
           _fail(otherDep.depender.name);
         }
 
@@ -533,9 +551,12 @@ class BacktrackingSolver {
       var source = sources[dep.source];
       if (!source.descriptionsEqual(
           dep.description, required.dep.description)) {
+        _deducer.add(_dependencyToFact(dependency));
+
         // Mark the dependers as failing rather than the package itself, because
         // no version with this description will be compatible.
         for (var otherDep in _selection.getDependenciesOn(dep.name)) {
+          _deducer.add(_dependencyToFact(otherDep));
           _fail(otherDep.depender.name);
         }
 
@@ -590,6 +611,10 @@ class BacktrackingSolver {
     // Make sure the package doesn't have any bad dependencies.
     for (var dep in deps.toSet()) {
       if (!dep.isRoot && sources[dep.source] is UnknownSource) {
+        _deducer.add(new fact.Dependency(id.withConstraint(id.version), dep));
+        _deducer.add(new fact.Disallowed(
+            dep.withConstraint(VersionConstraint.any),
+            [fact.Cause.unknownSource]));
         throw new UnknownSourceException(id.name, [new Dependency(id, dep)]);
       }
 
@@ -651,13 +676,20 @@ class BacktrackingSolver {
   /// with the current SDK.
   ///
   /// Throws a [SolveFailure] if not.
-  void _validateSdkConstraint(Pubspec pubspec) {
+  void _validateSdkConstraint(PackageId id, Pubspec pubspec) {
     if (_overrides.containsKey(pubspec.name)) return;
     if (pubspec.environment.sdkVersion.allows(sdk.version)) return;
 
+    _deducer.add(new fact.Disallowed(
+        id.withConstraint(id.version), [fact.Cause.badSdkVersion]));
     throw new BadSdkVersionException(pubspec.name,
         'Package ${pubspec.name} requires SDK version '
         '${pubspec.environment.sdkVersion} but the current SDK is '
         '${sdk.version}.');
   }
+
+  fact.Dependency _dependencyToFact(Dependency dependency) =>
+      new fact.Dependency(
+          dependency.depender.withConstraint(dependency.depender.version),
+          dependency.dep);
 }

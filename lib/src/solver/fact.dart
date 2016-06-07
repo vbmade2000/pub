@@ -8,6 +8,7 @@ abstract class Cause {
   static const rootDependency = const _RootCause("root dependency");
   static const explicitDependency = const _RootCause("explicit dependency");
   static const packageNotFound = const _RootCause("package not found");
+  static const noVersion = const _RootCause("package version not found");
   static const badSdkVersion = const _RootCause("bad SDK version");
   static const unknownSource = const _RootCause("unknown dependency source");
 }

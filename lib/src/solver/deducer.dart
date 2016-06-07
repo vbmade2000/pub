@@ -171,7 +171,8 @@ class Deducer {
     // Fill [matchingByAllowed] and trim any irrelevant dependencies while we're
     // at it.
     var ref = fact.dep.toRef();
-    for (var dependency in _dependenciesByDepender[ref].toList()) {
+    var byDepender = _dependenciesByDepender.putIfAbsent(ref, () => new Set());
+    for (var dependency in byDepender.toList()) {
       var intersection = fact.dep.constraint
           .intersect(dependency.depender.constraint);
 
@@ -200,9 +201,13 @@ class Deducer {
             dependency.allowed,
             [dependency, fact]);
         _fromCurrent.add(newDependency);
-        matchingByAllowed[newDependency.allowed.name] = newDependency;
+        matchingByAllowed
+            .putIfAbsent(newDependency.allowed.name, () => new Set())
+            .add(newDependency);
       } else {
-        matchingByAllowed[dependency.allowed.name] = dependency;
+        matchingByAllowed
+            .putIfAbsent(dependency.allowed.name, () => new Set())
+            .add(dependency);
       }
     }
 
@@ -236,7 +241,8 @@ class Deducer {
     }
 
     // Trim any dependencies whose allowed versions aren't covered by [fact].
-    for (var dependency in _dependenciesByAllowed[ref].toList()) {
+    var byAllowed = _dependenciesByAllowed.putIfAbsent(ref, () => new Set());
+    for (var dependency in byAllowed.toList()) {
       var result = _requiredAndAllowed(fact, dependency);
       if (result == dependency) continue;
 
@@ -247,7 +253,9 @@ class Deducer {
 
   void _requiredIntoIncompatibilities(Required fact) {
     // Remove any incompatibilities that are no longer relevant.
-    for (var incompatibility in _incompatibilities[fact.dep.toRef()].toList()) {
+    var incompatibilities = _incompatibilities.putIfAbsent(
+        fact.dep.toRef(), () => new Set());
+    for (var incompatibility in incompatibilities.toList()) {
       _removeIncompatibility(incompatibility);
       var result = _requiredAndIncompatibility(fact, incompatibility);
       if (result != null) _fromCurrent.add(result);
@@ -317,7 +325,8 @@ class Deducer {
   void _disallowedIntoDependencies(Disallowed fact) {
     // Trim dependencies from [fact.dep].
     var ref = fact.dep.toRef();
-    for (var dependency in _dependenciesByDepender[ref].toList()) {
+    var byDepender = _dependenciesByDepender.putIfAbsent(ref, () => new Set());
+    for (var dependency in byDepender.toList()) {
       var result = _disallowedAndDepender(fact, dependency);
       if (result == dependency) continue;
       _removeDependency(dependency);
@@ -325,7 +334,8 @@ class Deducer {
     }
 
     // Trim dependencies onto [fact.dep].
-    for (var dependency in _dependenciesByAllowed[ref].toList()) {
+    var byAllowed = _dependenciesByAllowed.putIfAbsent(ref, () => new Set());
+    for (var dependency in byAllowed.toList()) {
       var result = _disallowedAndAllowed(fact, dependency);
       if (result == dependency) continue;
       _removeDependency(dependency);
@@ -335,7 +345,9 @@ class Deducer {
 
   void _disallowedIntoIncompatibilities(Disallowed fact) {
     // Remove any incompatibilities that are no longer relevant.
-    for (var incompatibility in _incompatibilities[fact.dep.toRef()].toList()) {
+    var incompatibilities = _incompatibilities
+        .putIfAbsent(fact.dep.toRef(), () => new Set());
+    for (var incompatibility in incompatibilities.toList()) {
       var result = _disallowedAndIncompatibility(fact, incompatibility);
       if (result == incompatibility) continue;
       _removeIncompatibility(incompatibility);
@@ -351,7 +363,9 @@ class Deducer {
 
     // Check whether [fact] can be merged with other dependencies with the same
     // depender and allowed.
-    for (var dependency in _dependenciesByDepender(fact.depender.toRef())) {
+    var byDepender = _dependenciesByDepender.putIfAbsent(
+        fact.depender.toRef(), () => new Set());
+    for (var dependency in byDepender.toList()) {
       if (dependency.allowed.toRef() != fact.allowed.toRef()) continue;
 
       if (dependency.allowed == fact.allowed) {
@@ -490,11 +504,13 @@ class Deducer {
     // we can add
     //
     // * a [0, 1) depends on c [0, 2)
-    var byAllowed = groupBy(
-        _dependenciesByDepender[fact.allowed.toRef()].where((dependency) =>
-            fact.allowed.constraint.allowsAny(dependency.depender.constraint)),
+    var dependencyByAllowed = groupBy(
+        _dependenciesByDepender
+            .putIfAbsent(fact.allowed.toRef(), () => new Set())
+            .where((dependency) => fact.allowed.constraint.allowsAny(
+                dependency.depender.constraint)),
         (dependency) => dependency.allowed.toRef());
-    for (var dependencies in byAllowed.values) {
+    for (var dependencies in dependencyByAllowed.values) {
       var allowed = _transitiveAllowed(fact.allowed, dependencies);
       if (allowed == null) continue;
 
@@ -502,7 +518,9 @@ class Deducer {
           fact.depender, allowed, dependencies.toList()..add(fact)));
     }
 
-    for (var dependency in _dependenciesByAllowed[fact.depender.toRef()]) {
+    var dependerByAllowed = _dependenciesByAllowed
+        .putIfAbsent(fact.depender.toRef(), () => new Set());
+    for (var dependency in dependerByAllowed) {
       if (!dependency.allowed.constraint.allowsAny(fact.depender.constraint)) {
         continue;
       }
@@ -629,7 +647,7 @@ class Deducer {
 
   void _dependencyIntoIncompatibilities(Dependency fact) {
     var byNonMatching = groupBy(
-        _incompatibilities[fact.allowed.toRef()],
+        _incompatibilities.putIfAbsent(fact.allowed.toRef(), () => new Set()),
         (incompatibility) =>
             _nonMatching(incompatibility, fact.allowed).toRef());
     for (var incompatibilities in byNonMatching.values) {
@@ -658,7 +676,9 @@ class Deducer {
       assert(dep == fact.dep1 || dep == fact.dep2);
       var otherDep = dep == fact.dep1 ? fact.dep2 : fact.dep1;
 
-      for (var incompatibility in _incompatibilities[dep.toRef()]) {
+      var incompatibilities = _incompatibilities
+          .putIfAbsent(dep.toRef(), () => new Set());
+      for (var incompatibility in incompatibilities) {
         // Try to merge [fact] with adjacent incompatibilities. For example, if
         //
         // * a [0, 1) is incompatible with b [0, 1) (fact)
@@ -743,14 +763,16 @@ class Deducer {
     // TODO: do we need special handling for "a depends on b" + "a is
     // incompatible with b"?
 
-    for (var dependency in _dependenciesByAllowed[ref1]) {
+    for (var dependency in
+        _dependenciesByAllowed.putIfAbsent(ref1, () => new Set())) {
       var incompatible = _transitiveIncompatible(dependency.allowed, siblings);
       if (incompatible == null) continue;
       _fromCurrent.add(new Incompatibility(dependency.depender, incompatible,
           [dependency]..addAll(siblings)));
     }
 
-    for (var dependency in _dependenciesByAllowed[ref2]) {
+    for (var dependency in
+        _dependenciesByAllowed.putIfAbsent(ref2, () => new Set())) {
       var incompatible = _transitiveIncompatible(dependency.allowed, siblings);
       if (incompatible == null) continue;
       _fromCurrent.add(new Incompatibility(dependency.depender, incompatible,
@@ -842,7 +864,7 @@ class Deducer {
     assert(disallowed.dep.name == dependency.depender.name);
 
     var trimmed = _depMinus(dependency.depender, disallowed.dep);
-    if (trimmed = null) {
+    if (trimmed == null) {
       // If all versions in [dependency.depender] are covered by [disallowed],
       // the dependency is irrelevant and can be discarded. For example, if
       //
@@ -886,7 +908,7 @@ class Deducer {
     assert(disallowed.dep.name == dependency.allowed.name);
 
     var trimmed = _depMinus(dependency.allowed, disallowed.dep);
-    if (trimmed = null) {
+    if (trimmed == null) {
       // If all versions in [dependency.allowed] are covered by [disallowed],
       // then this dependency can never be satisfied and the depender should be
       // disallowed entirely. For example, if
@@ -1148,8 +1170,6 @@ class Deducer {
 
   // Merge [deps], [_allIds]-aware to reduce gaps. `null` if the deps are
   // incompatible source/desc.
-  //
-  // TODO: [_transitiveIncompatible] needs this to return `null` for empty list.
   PackageDep _mergeDeps(Iterable<PackageDep> deps) {
     var list = deps.toList();
     if (list.isEmpty) return null;
@@ -1159,7 +1179,8 @@ class Deducer {
       if (dep.toRef() != ref) return null;
     }
 
-    return _maximizers[ref].maximize(list.map((dep) => dep.constraint));
+    return ref.withConstraint(
+        _maximizers[ref].maximize(list.map((dep) => dep.constraint)));
   }
 
   // Intersect [deps], return `null` if they aren't compatible (diff name, diff
