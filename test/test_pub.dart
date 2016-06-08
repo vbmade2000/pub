@@ -26,6 +26,7 @@ import 'package:pub/src/io.dart';
 import 'package:pub/src/lock_file.dart';
 import 'package:pub/src/log.dart' as log;
 import 'package:pub/src/package.dart';
+import 'package:pub/src/source_registry.dart';
 import 'package:pub/src/system_cache.dart';
 import 'package:pub/src/utils.dart';
 import 'package:pub/src/validator.dart';
@@ -476,7 +477,8 @@ void createLockFile(String package, {Iterable<String> sandbox,
   schedule(() async {
     var cache = new SystemCache(rootDir: p.join(sandboxDir, cachePath));
 
-    var lockFile = _createLockFile(sandbox: sandbox, hosted: hosted);
+    var lockFile = _createLockFile(cache.sources,
+        sandbox: sandbox, hosted: hosted);
 
     await d.dir(package, [
       d.file('pubspec.lock', lockFile.serialize(null)),
@@ -491,8 +493,8 @@ void createPackagesFile(String package, {Iterable<String> sandbox,
     Map<String, String> hosted}) {
   schedule(() async {
     var cache = new SystemCache(rootDir: p.join(sandboxDir, cachePath));
-
-    var lockFile = _createLockFile(sandbox: sandbox, hosted: hosted);
+    var lockFile = _createLockFile(cache.sources,
+        sandbox: sandbox, hosted: hosted);
 
     await d.dir(package, [
       d.file('.packages', lockFile.packagesFile(cache, package))
@@ -509,7 +511,8 @@ void createPackagesFile(String package, {Iterable<String> sandbox,
 ///
 /// [hosted] is a list of package names to version strings for dependencies on
 /// hosted packages.
-LockFile _createLockFile({Iterable<String> sandbox, Map<String, String> hosted}) {
+LockFile _createLockFile(SourceRegistry sources, {Iterable<String> sandbox,
+    Map<String, String> hosted}) {
   var dependencies = {};
 
   if (sandbox != null) {
@@ -533,7 +536,7 @@ LockFile _createLockFile({Iterable<String> sandbox, Map<String, String> hosted})
     });
   }
 
-  return new LockFile(packages);
+  return new LockFile(packages, sources);
 }
 
 /// Returns the path to the version of [package] used by pub.
@@ -719,7 +722,6 @@ Future<Pair<List<String>, List<String>>> schedulePackageValidation(
     ValidatorCreator fn) {
   return schedule(() {
     var cache = new SystemCache(rootDir: p.join(sandboxDir, cachePath));
-
     return new Future.sync(() {
       var validator = fn(new Entrypoint(p.join(sandboxDir, appPath), cache));
       return validator.validate().then((_) {

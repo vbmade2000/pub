@@ -12,7 +12,6 @@ import 'package:pub/src/sdk.dart' as sdk;
 import 'package:pub/src/solver/version_solver.dart';
 import 'package:pub/src/source.dart';
 import 'package:pub/src/source/cached.dart';
-import 'package:pub/src/source_registry.dart';
 import 'package:pub/src/system_cache.dart';
 import 'package:pub/src/utils.dart';
 import 'package:pub_semver/pub_semver.dart';
@@ -1113,11 +1112,11 @@ testResolve(String description, Map packages, {
   test(description, () {
     source1 = new MockSource('mock1');
     source2 = new MockSource('mock2');
-    sources.register(source1);
-    sources.register(source2);
-    sources.setDefault(source1.name);
 
     var cache = new SystemCache(rootDir: '.');
+    cache.sources.register(source1);
+    cache.sources.register(source2);
+    cache.sources.setDefault(source1.name);
 
     // Build the test package graph.
     var root;
@@ -1149,12 +1148,12 @@ testResolve(String description, Map packages, {
     // Parse the lockfile.
     var realLockFile;
     if (lockfile == null) {
-      realLockFile = new LockFile.empty();
+      realLockFile = new LockFile.empty(cache.sources);
     } else {
       realLockFile = new LockFile(lockfile.keys.map((name) {
         var version = new Version.parse(lockfile[name]);
         return new PackageId(name, source1.name, version, name);
-      }));
+      }), cache.sources);
     }
 
     // Resolve the versions.

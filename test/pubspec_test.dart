@@ -5,6 +5,7 @@
 import 'package:pub/src/package.dart';
 import 'package:pub/src/pubspec.dart';
 import 'package:pub/src/source.dart';
+import 'package:pub/src/source/path.dart';
 import 'package:pub/src/source_registry.dart';
 import 'package:pub/src/system_cache.dart';
 import 'package:pub_semver/pub_semver.dart';
@@ -32,7 +33,9 @@ class MockSource extends Source {
 
 main() {
   group('parse()', () {
+    var sources = new SourceRegistry();
     sources.register(new MockSource());
+    sources.register(new PathSource());
 
     var throwsPubspecException =
         throwsA(new isInstanceOf<PubspecException>());
@@ -46,24 +49,24 @@ main() {
             predicate((error) => error.message.contains(expectedContains))));
       }
 
-      var pubspec = new Pubspec.parse(contents);
+      var pubspec = new Pubspec.parse(contents, sources);
       expect(() => fn(pubspec), expectation);
     }
 
     test("doesn't eagerly throw an error for an invalid field", () {
       // Shouldn't throw an error.
-      new Pubspec.parse('version: not a semver');
+      new Pubspec.parse('version: not a semver', sources);
     });
 
     test("eagerly throws an error if the pubspec name doesn't match the "
         "expected name", () {
-      expect(() => new Pubspec.parse("name: foo", expectedName: 'bar'),
+      expect(() => new Pubspec.parse("name: foo", sources, expectedName: 'bar'),
           throwsPubspecException);
     });
 
     test("eagerly throws an error if the pubspec doesn't have a name and an "
         "expected name is passed", () {
-      expect(() => new Pubspec.parse("{}", expectedName: 'bar'),
+      expect(() => new Pubspec.parse("{}", sources, expectedName: 'bar'),
           throwsPubspecException);
     });
 
@@ -73,7 +76,7 @@ dependencies:
   foo:
     mock: ok
     version: ">=1.2.3 <3.4.5"
-''');
+''', sources);
 
       var foo = pubspec.dependencies[0];
       expect(foo.name, equals('foo'));
@@ -85,7 +88,7 @@ dependencies:
     test("allows an empty dependencies map", () {
       var pubspec = new Pubspec.parse('''
 dependencies:
-''');
+''', sources);
 
       expect(pubspec.dependencies, isEmpty);
     });
@@ -96,7 +99,7 @@ dev_dependencies:
   foo:
     mock: ok
     version: ">=1.2.3 <3.4.5"
-''');
+''', sources);
 
       var foo = pubspec.devDependencies[0];
       expect(foo.name, equals('foo'));
@@ -108,7 +111,7 @@ dev_dependencies:
     test("allows an empty dev dependencies map", () {
       var pubspec = new Pubspec.parse('''
 dev_dependencies:
-''');
+''', sources);
 
       expect(pubspec.devDependencies, isEmpty);
     });
@@ -119,7 +122,7 @@ dependency_overrides:
   foo:
     mock: ok
     version: ">=1.2.3 <3.4.5"
-''');
+''', sources);
 
       var foo = pubspec.dependencyOverrides[0];
       expect(foo.name, equals('foo'));
@@ -131,7 +134,7 @@ dependency_overrides:
     test("allows an empty dependency overrides map", () {
       var pubspec = new Pubspec.parse('''
 dependency_overrides:
-''');
+''', sources);
 
       expect(pubspec.dependencyOverrides, isEmpty);
     });
@@ -141,7 +144,7 @@ dependency_overrides:
 dependencies:
   foo:
     unknown: blah
-''');
+''', sources);
 
       var foo = pubspec.dependencies[0];
       expect(foo.name, equals('foo'));
@@ -288,7 +291,7 @@ transformers: [{pkg: {\$key: "value"}}]''',
 name: pkg
 transformers:
 - pkg: {outer: {\$inner: value}}
-''');
+''', sources);
 
       var pkg = pubspec.transformers[0].single;
       expect(pkg.configuration["outer"]["\$inner"], equals("value"));
@@ -350,7 +353,7 @@ dependencies:
   foo:
     mock: ok
 transformers:
-- foo''');
+- foo''', sources);
 
       expect(pubspec.transformers[0].single.id.package, equals("foo"));
     });
@@ -362,7 +365,7 @@ dev_dependencies:
   foo:
     mock: ok
 transformers:
-- foo''');
+- foo''', sources);
 
       expect(pubspec.transformers[0].single.id.package, equals("foo"));
     });
@@ -374,7 +377,7 @@ dependency_overrides:
   foo:
     mock: ok
 transformers:
-- foo''');
+- foo''', sources);
 
       expect(pubspec.transformers[0].single.id.package, equals("foo"));
     });
@@ -385,7 +388,7 @@ transformers:
 # Including for completeness
 # ...and hoping the spec expands to include details about author, version, etc
 # See http://www.dartlang.org/docs/pub-package-manager/ for details
-''');
+''', sources);
       expect(pubspec.version, equals(Version.none));
       expect(pubspec.dependencies, isEmpty);
     });
@@ -402,14 +405,14 @@ dependencies:
 
     group("environment", () {
       test("defaults to any SDK constraint if environment is omitted", () {
-        var pubspec = new Pubspec.parse('');
+        var pubspec = new Pubspec.parse('', sources);
         expect(pubspec.environment.sdkVersion, equals(VersionConstraint.any));
       });
 
       test("allows an empty environment map", () {
         var pubspec = new Pubspec.parse('''
 environment:
-''');
+''', sources);
         expect(pubspec.environment.sdkVersion, equals(VersionConstraint.any));
       });
 
@@ -422,7 +425,7 @@ environment:
         var pubspec = new Pubspec.parse('''
 environment:
   sdk: ">=1.2.3 <2.3.4"
-''');
+''', sources);
         expect(pubspec.environment.sdkVersion,
             equals(new VersionConstraint.parse(">=1.2.3 <2.3.4")));
       });
@@ -442,7 +445,7 @@ environment:
 
     group("publishTo", () {
       test("defaults to null if omitted", () {
-        var pubspec = new Pubspec.parse('');
+        var pubspec = new Pubspec.parse('', sources);
         expect(pubspec.publishTo, isNull);
       });
 
@@ -454,14 +457,14 @@ environment:
       test("allows a URL", () {
         var pubspec = new Pubspec.parse('''
 publish_to: http://example.com
-''');
+''', sources);
         expect(pubspec.publishTo, equals("http://example.com"));
       });
 
       test("allows none", () {
         var pubspec = new Pubspec.parse('''
 publish_to: none
-''');
+''', sources);
         expect(pubspec.publishTo, equals("none"));
       });
 
@@ -473,7 +476,7 @@ publish_to: none
 
     group("executables", () {
       test("defaults to an empty map if omitted", () {
-        var pubspec = new Pubspec.parse('');
+        var pubspec = new Pubspec.parse('', sources);
         expect(pubspec.executables, isEmpty);
       });
 
@@ -481,7 +484,7 @@ publish_to: none
         var pubspec = new Pubspec.parse('''
 executables:
   abcDEF-123_: "abc DEF-123._"
-''');
+''', sources);
         expect(pubspec.executables['abcDEF-123_'], equals('abc DEF-123._'));
       });
 
@@ -519,7 +522,7 @@ executables:
         var pubspec = new Pubspec.parse('''
 executables:
   command:
-''');
+''', sources);
         expect(pubspec.executables['command'], equals('command'));
       });
     });

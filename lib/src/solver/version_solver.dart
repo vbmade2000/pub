@@ -13,8 +13,8 @@ import '../lock_file.dart';
 import '../log.dart' as log;
 import '../package.dart';
 import '../pubspec.dart';
-import '../source_registry.dart';
 import '../system_cache.dart';
+import '../source_registry.dart';
 import '../utils.dart';
 import 'backtracking_solver.dart';
 import 'solve_report.dart';
@@ -31,7 +31,7 @@ import 'solve_report.dart';
 /// If [upgradeAll] is true, the contents of [lockFile] are ignored.
 Future<SolveResult> resolveVersions(SolveType type, SystemCache cache,
     Package root, {LockFile lockFile, List<String> useLatest}) {
-  if (lockFile == null) lockFile = new LockFile.empty();
+  if (lockFile == null) lockFile = new LockFile.empty(cache.sources);
   if (useLatest == null) useLatest = [];
 
   return log.progress('Resolving dependencies', () {
@@ -83,9 +83,10 @@ class SolveResult {
         .where((pubspec) =>
             !_root.dependencyOverrides.any((dep) => dep.name == pubspec.name))
         .map((pubspec) => pubspec.environment.sdkVersion));
-    return new LockFile(packages, sdkConstraint: sdkConstraint);
+    return new LockFile(packages, _sources, sdkConstraint: sdkConstraint);
   }
 
+  final SourceRegistry _sources;
   final Package _root;
   final LockFile _previousLockFile;
 
@@ -97,7 +98,7 @@ class SolveResult {
 
     var changed = packages
         .where((id) =>
-            !sources.idsEqual(_previousLockFile.packages[id.name], id))
+            !_sources.idsEqual(_previousLockFile.packages[id.name], id))
         .map((id) => id.name).toSet();
 
     return changed.union(_previousLockFile.packages.keys
@@ -105,12 +106,12 @@ class SolveResult {
         .toSet());
   }
 
-  SolveResult.success(this._root, this._previousLockFile,
+  SolveResult.success(this._sources, this._root, this._previousLockFile,
       this.packages, this.overrides, this.pubspecs, this.availableVersions,
       this.attemptedSolutions)
       : error = null;
 
-  SolveResult.failure(this._root, this._previousLockFile,
+  SolveResult.failure(this._sources, this._root, this._previousLockFile,
       this.overrides, this.error, this.attemptedSolutions)
       : this.packages = null,
         this.pubspecs = null,
@@ -120,7 +121,7 @@ class SolveResult {
   ///
   /// [type] is the type of version resolution that was run.
   void showReport(SolveType type) {
-    new SolveReport(type, _root, _previousLockFile, this).show();
+    new SolveReport(type, _sources, _root, _previousLockFile, this).show();
   }
 
   /// Displays a one-line message summarizing what changes were made (or would
@@ -128,7 +129,7 @@ class SolveResult {
   ///
   /// [type] is the type of version resolution that was run.
   void summarizeChanges(SolveType type, {bool dryRun: false}) {
-    new SolveReport(type, _root, _previousLockFile, this)
+    new SolveReport(type, _sources, _root, _previousLockFile, this)
         .summarize(dryRun: dryRun);
   }
 

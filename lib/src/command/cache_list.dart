@@ -7,7 +7,6 @@ import 'dart:convert';
 import '../command.dart';
 import '../log.dart' as log;
 import '../source/cached.dart';
-import '../source_registry.dart';
 
 /// Handles the `cache list` pub command.
 class CacheListCommand extends PubCommand {
@@ -21,7 +20,7 @@ class CacheListCommand extends PubCommand {
     // TODO(keertip): Add flag to list packages from non default sources.
     var packagesObj = <String, Map>{};
 
-    var source = cache.liveSource(sources.defaultSource.name) as CachedSource;
+    var source = cache.defaultSource as CachedSource;
     for (var package in source.getCachedPackages()) {
       var packageInfo = packagesObj.putIfAbsent(package.name, () => {});
       packageInfo[package.version.toString()] = {'location': package.dir};

@@ -9,7 +9,6 @@ import 'package:pub_semver/pub_semver.dart';
 import 'package.dart';
 import 'pubspec.dart';
 import 'system_cache.dart';
-import 'source_registry.dart';
 import 'utils.dart';
 
 /// A source from which to get packages.
@@ -62,9 +61,6 @@ abstract class Source {
   ///
   /// Defaults to `false`.
   final bool hasMultipleVersions = false;
-
-  /// Whether or not this source is the default source.
-  bool get isDefault => sources.defaultSource == this;
 
   /// Records the system cache to which this source belongs.
   ///

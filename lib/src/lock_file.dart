@@ -18,6 +18,9 @@ import 'utils.dart';
 
 /// A parsed and validated `pubspec.lock` file.
 class LockFile {
+  /// The source registry with which the lock file's IDs are interpreted.
+  final SourceRegistry _sources;
+
   /// The packages this lockfile pins.
   final Map<String, PackageId> packages;
 
@@ -29,33 +32,39 @@ class LockFile {
   /// If passed, [sdkConstraint] represents the intersection of all SKD
   /// constraints for all locked packages. It defaults to
   /// [VersionConstraint.any].
-  LockFile(Iterable<PackageId> ids, {VersionConstraint sdkConstraint})
+  LockFile(Iterable<PackageId> ids, SourceRegistry sources,
+          {VersionConstraint sdkConstraint})
       : this._(
           new Map.fromIterable(
               ids.where((id) => !id.isRoot),
               key: (id) => id.name),
-          sdkConstraint ?? VersionConstraint.any);
+          sdkConstraint ?? VersionConstraint.any,
+          sources);
 
-  LockFile._(Map<String, PackageId> packages, this.sdkConstraint)
+  LockFile._(Map<String, PackageId> packages, this.sdkConstraint, this._sources)
       : packages = new UnmodifiableMapView(packages);
 
-  LockFile.empty()
+  LockFile.empty(this._sources)
       : packages = const {},
         sdkConstraint = VersionConstraint.any;
 
   /// Loads a lockfile from [filePath].
-  factory LockFile.load(String filePath) =>
-      LockFile._parse(filePath, readTextFile(filePath));
+  factory LockFile.load(String filePath, SourceRegistry sources) {
+    return LockFile._parse(filePath, readTextFile(filePath), sources);
+  }
 
   /// Parses a lockfile whose text is [contents].
-  factory LockFile.parse(String contents) => LockFile._parse(null, contents);
+  factory LockFile.parse(String contents, SourceRegistry sources) {
+    return LockFile._parse(null, contents, sources);
+  }
 
   /// Parses the lockfile whose text is [contents].
   ///
   /// [filePath] is the system-native path to the lockfile on disc. It may be
   /// `null`.
-  static LockFile _parse(String filePath, String contents) {
-    if (contents.trim() == '') return new LockFile.empty();
+  static LockFile _parse(String filePath, String contents,
+      SourceRegistry sources) {
+    if (contents.trim() == '') return new LockFile.empty(sources);
 
     var sourceUrl;
     if (filePath != null) sourceUrl = p.toUri(filePath);
@@ -116,7 +125,7 @@ class LockFile {
       });
     }
 
-    return new LockFile._(packages, sdkConstraint);
+    return new LockFile._(packages, sdkConstraint, sources);
   }
 
   /// Runs [fn] and wraps any [FormatException] it throws in a
@@ -149,7 +158,7 @@ class LockFile {
 
     var packages = new Map.from(this.packages);
     packages[id.name] = id;
-    return new LockFile._(packages, sdkConstraint);
+    return new LockFile._(packages, sdkConstraint, _sources);
   }
 
   /// Returns a copy of this LockFile with a package named [name] removed.
@@ -160,7 +169,7 @@ class LockFile {
 
     var packages = new Map.from(this.packages);
     packages.remove(name);
-    return new LockFile._(packages, sdkConstraint);
+    return new LockFile._(packages, sdkConstraint, _sources);
   }
 
   /// Returns the contents of the `.packages` file generated from this lockfile.
@@ -191,7 +200,7 @@ class LockFile {
     // Convert the dependencies to a simple object.
     var packageMap = {};
     packages.forEach((name, package) {
-      var description = sources[package.source]
+      var description = _sources[package.source]
           .serializeDescription(packageDir, package.description);
 
       packageMap[name] = {

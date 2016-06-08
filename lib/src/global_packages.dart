@@ -21,7 +21,6 @@ import 'pubspec.dart';
 import 'sdk.dart' as sdk;
 import 'solver/version_solver.dart';
 import 'source/cached.dart';
-import 'source_registry.dart';
 import 'system_cache.dart';
 import 'utils.dart';
 
@@ -87,7 +86,8 @@ class GlobalPackages {
     // be a mechanism for redoing dependency resolution if a path pubspec has
     // changed (see also issue 20499).
     await _installInCache(
-        sources.git.refFor(name, repo).withConstraint(VersionConstraint.any),
+        cache.git.source.refFor(name, repo)
+            .withConstraint(VersionConstraint.any),
         executables, overwriteBinStubs: overwriteBinStubs);
   }
 
@@ -105,7 +105,7 @@ class GlobalPackages {
       List<String> executables, {bool overwriteBinStubs}) async {
     _describeActive(name);
     await _installInCache(
-        sources.hosted.refFor(name).withConstraint(constraint),
+        cache.hosted.source.refFor(name).withConstraint(constraint),
         executables,
         overwriteBinStubs: overwriteBinStubs);
   }
@@ -132,11 +132,11 @@ class GlobalPackages {
 
     // Write a lockfile that points to the local package.
     var fullPath = canonicalize(entrypoint.root.dir);
-    var id = sources.path.idFor(name, entrypoint.root.version, fullPath);
+    var id = cache.path.source.idFor(name, entrypoint.root.version, fullPath);
 
     // TODO(rnystrom): Look in "bin" and display list of binaries that
     // user can run.
-    _writeLockFile(name, new LockFile([id]));
+    _writeLockFile(name, new LockFile([id], cache.sources));
 
     var binDir = p.join(_directory, name, 'bin');
     if (dirExists(binDir)) deleteEntry(binDir);
@@ -150,7 +150,7 @@ class GlobalPackages {
       {bool overwriteBinStubs}) async {
     // Create a dummy package with just [dep] so we can do resolution on it.
     var root = new Package.inMemory(new Pubspec("pub global activate",
-        dependencies: [dep]));
+        dependencies: [dep], sources: cache.sources));
 
     // Resolve it and download its dependencies.
     var result = await resolveVersions(SolveType.GET, cache, root);
@@ -232,15 +232,15 @@ class GlobalPackages {
   /// Shows the user the currently active package with [name], if any.
   void _describeActive(String name) {
     try {
-      var lockFile = new LockFile.load(_getLockFilePath(name));
+      var lockFile = new LockFile.load(_getLockFilePath(name), cache.sources);
       var id = lockFile.packages[name];
 
       if (id.source == 'git') {
-        var url = sources.git.urlFromDescription(id.description);
+        var url = cache.git.source.urlFromDescription(id.description);
         log.message('Package ${log.bold(name)} is currently active from Git '
             'repository "${url}".');
       } else if (id.source == 'path') {
-        var path = sources.path.pathFromDescription(id.description);
+        var path = cache.path.source.pathFromDescription(id.description);
         log.message('Package ${log.bold(name)} is currently active at path '
             '"$path".');
       } else {
@@ -262,7 +262,7 @@ class GlobalPackages {
 
     _deleteBinStubs(name);
 
-    var lockFile = new LockFile.load(_getLockFilePath(name));
+    var lockFile = new LockFile.load(_getLockFilePath(name), cache.sources);
     var id = lockFile.packages[name];
     log.message('Deactivated package ${_formatPackage(id)}.');
 
@@ -278,14 +278,14 @@ class GlobalPackages {
     var lockFilePath = _getLockFilePath(name);
     var lockFile;
     try {
-      lockFile = new LockFile.load(lockFilePath);
+      lockFile = new LockFile.load(lockFilePath, cache.sources);
     } on IOException {
       var oldLockFilePath = p.join(_directory, '$name.lock');
       try {
         // TODO(nweiz): This looks for Dart 1.6's old lockfile location.
         // Remove it when Dart 1.6 is old enough that we don't think anyone
         // will have these lockfiles anymore (issue 20703).
-        lockFile = new LockFile.load(oldLockFilePath);
+        lockFile = new LockFile.load(oldLockFilePath, cache.sources);
       } on IOException {
         // If we couldn't read the lock file, it's not activated.
         dataError("No active package ${log.bold(name)}.");
@@ -302,8 +302,9 @@ class GlobalPackages {
     var id = lockFile.packages[name];
     lockFile = lockFile.removePackage(name);
 
+    var source = cache.liveSource(id.source);
     var entrypoint;
-    if (cache.liveSource(id.source) is CachedSource) {
+    if (source is CachedSource) {
       // For cached sources, the package itself is in the cache and the
       // lockfile is the one we just loaded.
       entrypoint = new Entrypoint.inMemory(
@@ -313,7 +314,7 @@ class GlobalPackages {
       // directory for the package.
       assert(id.source == "path");
       entrypoint = new Entrypoint(
-          sources.path.pathFromDescription(id.description), cache,
+          cache.path.source.pathFromDescription(id.description), cache,
           isGlobal: true);
     }
 
@@ -392,7 +393,8 @@ class GlobalPackages {
     var name = p.basenameWithoutExtension(path);
     if (!fileExists(path)) path = p.join(path, 'pubspec.lock');
 
-    var id = new LockFile.load(p.join(_directory, path)).packages[name];
+    var id = new LockFile.load(p.join(_directory, path), cache.sources)
+        .packages[name];
 
     if (id == null) {
       throw new FormatException("Pubspec for activated package $name didn't "
@@ -405,10 +407,10 @@ class GlobalPackages {
   /// Returns formatted string representing the package [id].
   String _formatPackage(PackageId id) {
     if (id.source == 'git') {
-      var url = sources.git.urlFromDescription(id.description);
+      var url = cache.sources.git.urlFromDescription(id.description);
       return '${log.bold(id.name)} ${id.version} from Git repository "$url"';
     } else if (id.source == 'path') {
-      var path = sources.path.pathFromDescription(id.description);
+      var path = cache.sources.path.pathFromDescription(id.description);
       return '${log.bold(id.name)} ${id.version} at path "$path"';
     } else {
       return '${log.bold(id.name)} ${id.version}';

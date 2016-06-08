@@ -152,7 +152,7 @@ class LiveGitSource extends CachedSource {
     // Clone the repo to a temp directory.
     return withTempDir((tempDir) {
       return _clone(repo, tempDir, shallow: true).then((_) {
-        var pubspec = new Pubspec.load(tempDir);
+        var pubspec = new Pubspec.load(tempDir, systemCache.sources);
         return pubspec.name;
       });
     });
@@ -193,7 +193,8 @@ class LiveGitSource extends CachedSource {
           '${ref.description['url']} $revision.');
     }
 
-    return new Pubspec.parse(lines.join("\n"), expectedName: ref.name);
+    return new Pubspec.parse(lines.join("\n"), systemCache.sources,
+        expectedName: ref.name);
   }
 
   /// Clones a Git repo to the local filesystem.
@@ -224,7 +225,7 @@ class LiveGitSource extends CachedSource {
       await _checkOut(revisionCachePath, id.description['resolved-ref']);
     }
 
-    return new Package.load(id.name, revisionCachePath);
+    return new Package.load(id.name, revisionCachePath, systemCache.sources);
   }
 
   /// Returns the path to the revision-specific cache of [id].
@@ -247,7 +248,8 @@ class LiveGitSource extends CachedSource {
 
     var packages = listDir(systemCacheRoot)
         .where((entry) => dirExists(path.join(entry, ".git")))
-        .map((packageDir) => new Package.load(null, packageDir))
+        .map((packageDir) => new Package.load(
+            null, packageDir, systemCache.sources))
         .toList();
 
     // Note that there may be multiple packages with the same name and version

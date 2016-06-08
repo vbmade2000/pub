@@ -21,7 +21,6 @@ import 'sdk.dart' as sdk;
 import 'solver/version_solver.dart';
 import 'source/cached.dart';
 import 'source/unknown.dart';
-import 'source_registry.dart';
 import 'system_cache.dart';
 import 'utils.dart';
 
@@ -71,9 +70,9 @@ class Entrypoint {
     if (_lockFile != null) return _lockFile;
 
     if (!fileExists(lockFilePath)) {
-      _lockFile = new LockFile.empty();
+      _lockFile = new LockFile.empty(cache.sources);
     } else {
-      _lockFile = new LockFile.load(lockFilePath);
+      _lockFile = new LockFile.load(lockFilePath, cache.sources);
     }
 
     return _lockFile;
@@ -128,7 +127,7 @@ class Entrypoint {
   /// into any directory that might contain an entrypoint.
   Entrypoint(String rootDir, SystemCache cache, {bool packageSymlinks: true,
           this.isGlobal: false})
-      : root = new Package.load(null, rootDir),
+      : root = new Package.load(null, rootDir, cache.sources),
         cache = cache,
         _packageSymlinks = packageSymlinks,
         _inMemory = false;
@@ -546,15 +545,18 @@ class Entrypoint {
 
     if (!dep.constraint.allows(locked.version)) return false;
 
-    return sources[dep.source].descriptionsEqual(dep.description, locked.description);
+    var source = cache.sources[dep.source];
+    if (source == null) return false;
+
+    return source.descriptionsEqual(dep.description, locked.description);
   }
 
   /// Determines whether all of the packages in the lockfile are already
   /// installed and available.
   bool _arePackagesAvailable() {
     return lockFile.packages.values.every((package) {
-      var source = cache.liveSource(package.source);
-      if (source.source is UnknownSource) return false;
+      var source = cache.sources[package.source];
+      if (source is UnknownSource) return false;
 
       // We only care about cached sources. Uncached sources aren't "installed".
       // If one of those is missing, we want to show the user the file not
@@ -585,7 +587,7 @@ class Entrypoint {
       // impossible—for example, the user may have a very old application
       // package with a checked-in lockfile that's newer than the pubspec, but
       // that contains sdk dependencies.
-      if (source == null) return false;
+      if (source.source is UnknownSource) return false;
 
       var packagesFileUri = packages[lockFileId.name];
       if (packagesFileUri == null) return false;

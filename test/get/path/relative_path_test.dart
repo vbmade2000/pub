@@ -4,6 +4,7 @@
 
 import 'package:path/path.dart' as path;
 import 'package:pub/src/lock_file.dart';
+import 'package:pub/src/source_registry.dart';
 import 'package:scheduled_test/scheduled_test.dart';
 
 import '../../descriptor.dart' as d;
@@ -79,7 +80,7 @@ main() {
 
     schedule(() {
       var lockfilePath = path.join(sandboxDir, appPath, "pubspec.lock");
-      var lockfile = new LockFile.load(lockfilePath);
+      var lockfile = new LockFile.load(lockfilePath, new SourceRegistry());
       var description = lockfile.packages["foo"].description;
 
       expect(path.isRelative(description["path"]), isTrue);

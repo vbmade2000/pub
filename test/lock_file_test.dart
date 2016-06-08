@@ -37,18 +37,19 @@ class MockSource extends Source {
 }
 
 main() {
+  var sources = new SourceRegistry();
   var mockSource = new MockSource();
   sources.register(mockSource);
 
   group('LockFile', () {
     group('parse()', () {
       test('returns an empty lockfile if the contents are empty', () {
-        var lockFile = new LockFile.parse('');
+        var lockFile = new LockFile.parse('', sources);
         expect(lockFile.packages.length, equals(0));
       });
 
       test('returns an empty lockfile if the contents are whitespace', () {
-        var lockFile = new LockFile.parse('  \t\n  ');
+        var lockFile = new LockFile.parse('  \t\n  ', sources);
         expect(lockFile.packages.length, equals(0));
       });
 
@@ -63,7 +64,7 @@ packages:
     version: 2.3.4
     source: mock
     description: foo desc
-''');
+''', sources);
 
         expect(lockFile.packages.length, equals(2));
 
@@ -87,7 +88,7 @@ packages:
     source: bad
     version: 1.2.3
     description: foo desc
-''');
+''', sources);
         var foo = lockFile.packages['foo'];
         expect(foo.source, equals('bad'));
       });
@@ -95,7 +96,7 @@ packages:
       test("allows an empty dependency map", () {
         var lockFile = new LockFile.parse('''
 packages:
-''');
+''', sources);
         expect(lockFile.packages, isEmpty);
       });
 
@@ -103,7 +104,7 @@ packages:
         expect(() {
           new LockFile.parse('''
 not a map
-''');
+''', sources);
         }, throwsFormatException);
       });
 
@@ -111,7 +112,7 @@ not a map
         expect(() {
           new LockFile.parse('''
 packages: not a map
-''');
+''', sources);
         }, throwsFormatException);
       });
 
@@ -122,7 +123,7 @@ packages:
   foo:
     source: mock
     description: foo desc
-''');
+''', sources);
         }, throwsFormatException);
       });
 
@@ -134,7 +135,7 @@ packages:
     version: vorpal
     source: mock
     description: foo desc
-''');
+''', sources);
         }, throwsFormatException);
       });
 
@@ -145,7 +146,7 @@ packages:
   foo:
     version: 1.2.3
     description: foo desc
-''');
+''', sources);
         }, throwsFormatException);
       });
 
@@ -156,7 +157,7 @@ packages:
   foo:
     version: 1.2.3
     source: mock
-''');
+''', sources);
         }, throwsFormatException);
       });
 
@@ -168,7 +169,7 @@ packages:
     version: 1.2.3
     source: mock
     description: foo desc is bad
-''');
+''', sources);
         }, throwsFormatException);
       });
 
@@ -182,7 +183,7 @@ packages:
     version: 1.2.3
     source: mock
     description: foo desc
-''');
+''', sources);
       });
     });
 
@@ -192,7 +193,7 @@ packages:
           'foo', mockSource.name, new Version.parse('1.2.3'), 'foo desc'),
         new PackageId(
           'bar', mockSource.name, new Version.parse('3.2.1'), 'bar desc')
-      ]);
+      ], sources);
 
       expect(loadYaml(lockfile.serialize(null)), equals({
         'sdk': 'any',

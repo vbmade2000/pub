@@ -31,7 +31,8 @@ abstract class CachedSource extends LiveSource {
   Future<Pubspec> doDescribe(PackageId id) async {
     var packageDir = getDirectory(id);
     if (fileExists(path.join(packageDir, "pubspec.yaml"))) {
-      return new Pubspec.load(packageDir, expectedName: id.name);
+      return new Pubspec.load(packageDir, systemCache.sources,
+          expectedName: id.name);
     }
 
     return await describeUncached(id);

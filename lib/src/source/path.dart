@@ -20,7 +20,7 @@ class PathSource extends Source {
   final name = 'path';
 
   LiveSource bind(SystemCache systemCache) =>
-      new _LivePathSource(this, systemCache);
+      new LivePathSource(this, systemCache);
 
   /// Given a valid path reference description, returns the file path it
   /// describes.
@@ -129,12 +129,12 @@ class PathSource extends Source {
 }
 
 /// The bound version of [PathSource].
-class _LivePathSource extends LiveSource {
+class LivePathSource extends LiveSource {
   final PathSource source;
 
   final SystemCache systemCache;
 
-  _LivePathSource(this.source, this.systemCache);
+  LivePathSource(this.source, this.systemCache);
 
   Future<List<PackageId>> doGetVersions(PackageRef ref) async {
     // There's only one package ID for a given path. We just need to find the
@@ -150,7 +150,7 @@ class _LivePathSource extends LiveSource {
 
   Pubspec _loadPubspec(PackageRef ref) {
     var dir = _validatePath(ref.name, ref.description);
-    return new Pubspec.load(dir, expectedName: ref.name);
+    return new Pubspec.load(dir, systemCache.sources, expectedName: ref.name);
   }
 
   Future get(PackageId id, String symlink) {

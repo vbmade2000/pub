@@ -27,10 +27,10 @@ class HostedSource extends Source {
   final name = "hosted";
   final hasMultipleVersions = true;
 
-  CachedSource bind(SystemCache systemCache, {bool isOffline: false}) =>
+  LiveHostedSource bind(SystemCache systemCache, {bool isOffline: false}) =>
       isOffline
           ? new _OfflineHostedSource(this, systemCache)
-          : new _LiveHostedSource(this, systemCache);
+          : new LiveHostedSource(this, systemCache);
 
   /// Gets the default URL for the package server for hosted dependencies.
   String get defaultUrl {
@@ -113,12 +113,12 @@ class HostedSource extends Source {
 }
 
 /// The bound version of [HostedSource].
-class _LiveHostedSource extends CachedSource {
+class LiveHostedSource extends CachedSource {
   final HostedSource source;
 
   final SystemCache systemCache;
 
-  _LiveHostedSource(this.source, this.systemCache);
+  LiveHostedSource(this.source, this.systemCache);
 
   /// Downloads a list of all versions of a package that are available from the
   /// site.
@@ -139,7 +139,8 @@ class _LiveHostedSource extends CachedSource {
     var doc = JSON.decode(body);
     return doc['versions'].map((map) {
       var pubspec = new Pubspec.fromMap(
-          map['pubspec'], expectedName: ref.name, location: url);
+          map['pubspec'], systemCache.sources,
+          expectedName: ref.name, location: url);
       var id = source.idFor(ref.name, pubspec.version,
           url: _serverFor(ref.description));
       memoizePubspec(id, pubspec);
@@ -177,7 +178,8 @@ class _LiveHostedSource extends CachedSource {
     }
 
     return new Pubspec.fromMap(
-        version['pubspec'], expectedName: id.name, location: url);
+        version['pubspec'], systemCache.sources,
+        expectedName: id.name, location: url);
   }
 
   /// Downloads the package identified by [id] to the system cache.
@@ -189,7 +191,7 @@ class _LiveHostedSource extends CachedSource {
       await _download(parsed.last, parsed.first, id.version, packageDir);
     }
 
-    return new Package.load(id.name, getDirectory(id));
+    return new Package.load(id.name, getDirectory(id), systemCache.sources);
   }
 
   /// The system cache directory for the hosted source contains subdirectories
@@ -250,7 +252,7 @@ class _LiveHostedSource extends CachedSource {
     if (!dirExists(cacheDir)) return [];
 
     return listDir(cacheDir)
-        .map((entry) => new Package.load(null, entry))
+        .map((entry) => new Package.load(null, entry, systemCache.sources))
         .toList();
   }
 
@@ -374,7 +376,7 @@ class _LiveHostedSource extends CachedSource {
 ///
 /// This uses the system cache to get the list of available packages and does
 /// no network access.
-class _OfflineHostedSource extends _LiveHostedSource {
+class _OfflineHostedSource extends LiveHostedSource {
   _OfflineHostedSource(HostedSource source, SystemCache systemCache)
       : super(source, systemCache);
 

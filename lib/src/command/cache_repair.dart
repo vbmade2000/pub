@@ -9,7 +9,6 @@ import '../exit_codes.dart' as exit_codes;
 import '../io.dart';
 import '../log.dart' as log;
 import '../source/cached.dart';
-import '../source_registry.dart';
 import '../utils.dart';
 
 /// Handles the `cache repair` pub command.
@@ -45,7 +44,7 @@ class CacheRepairCommand extends PubCommand {
 
       for (var id in failures) {
         buffer.write("- ${log.bold(id.name)} ${id.version}");
-        if (sources[id.source] != sources.defaultSource) {
+        if (cache.sources[id.source] != cache.sources.defaultSource) {
           buffer.write(" from ${id.source}");
         }
         buffer.writeln();

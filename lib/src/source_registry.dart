@@ -9,8 +9,6 @@ import 'source/hosted.dart';
 import 'source/path.dart';
 import 'source/unknown.dart';
 
-final sources = new SourceRegistry._();
-
 /// A class that keeps track of [Source]s used for getting packages.
 class SourceRegistry {
   /// The registered sources.
@@ -44,7 +42,7 @@ class SourceRegistry {
   /// The built-in [PathSource].
   PathSource get path => _sources["path"] as PathSource;
 
-  SourceRegistry._() {
+  SourceRegistry() {
     _default = hosted;
   }
 

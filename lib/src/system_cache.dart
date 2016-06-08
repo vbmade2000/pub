@@ -13,6 +13,7 @@ import 'package.dart';
 import 'source/cached.dart';
 import 'source/git.dart';
 import 'source/hosted.dart';
+import 'source/path.dart';
 import 'source/unknown.dart';
 import 'source.dart';
 import 'source_registry.dart';
@@ -39,6 +40,12 @@ class SystemCache {
     }
   })();
 
+  /// The registry for sources used by this system cache.
+  ///
+  /// New sources registered here will be available through [liveSources] and
+  /// [liveSource].
+  final sources = new SourceRegistry();
+
   /// The live sources bound to this cache.
   final _liveSources = <String, LiveSource>{};
 
@@ -53,10 +60,13 @@ class SystemCache {
   LiveGitSource get git => _liveSources["git"] as LiveGitSource;
 
   /// The built-in live hosted source bound to this cache.
-  LiveSource get hosted => _liveSources["hosted"];
+  LiveHostedSource get hosted => _liveSources["hosted"] as LiveHostedSource;
 
   /// The built-in live path source bound to this cache.
-  LiveSource get path => _liveSources["path"];
+  LivePathSource get path => _liveSources["path"] as LivePathSource;
+
+  /// The default source bound to this cache.
+  LiveSource get defaultSource => liveSource(null);
 
   /// Creates a system cache and registers all sources in [sources].
   ///
@@ -90,7 +100,7 @@ class SystemCache {
     }
 
     var dir = source.getDirectory(id);
-    return new Package.load(id.name, dir);
+    return new Package.load(id.name, dir, sources);
   }
 
   /// Determines if the system cache contains the package identified by [id].
