@@ -35,7 +35,6 @@ main() {
   group('parse()', () {
     var sources = new SourceRegistry();
     sources.register(new MockSource());
-    sources.register(new PathSource());
 
     var throwsPubspecException =
         throwsA(new isInstanceOf<PubspecException>());
