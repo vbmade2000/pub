@@ -653,7 +653,7 @@ backtracking() {
     'c 5.0.0': {},
   }, result: {
     'myapp from root': '0.0.0',
-    'a': '1.0.0',
+    'a-x': '1.0.0',
     'b': '1.0.0',
     'c': '5.0.0'
   }, maxTries: 2);
@@ -1526,11 +1526,8 @@ PackageId parseSpec(SourceRegistry sources, String text, [String version]) {
     }
   }
 
-  var source = "mock1";
-  if (match[7] != null) {
-    source = match[7];
-    if (source == "root") source = null;
-  }
+  var source = sources["mock1"];
+  if (match[7] != null) source = match[7] == "root" ? null : sources[match[7]];
 
-  return new PackageId(name, sources[source], parsedVersion, description);
+  return new PackageId(name, source, parsedVersion, description);
 }
