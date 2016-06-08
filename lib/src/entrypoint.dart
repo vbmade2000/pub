@@ -561,10 +561,11 @@ class Entrypoint {
       // We only care about cached sources. Uncached sources aren't "installed".
       // If one of those is missing, we want to show the user the file not
       // found error later since installing won't accomplish anything.
-      if (source is! CachedSource) return true;
+      var liveSource = cache.liveSource(package.source);
+      if (liveSource is! CachedSource) return true;
 
       // Get the directory.
-      var dir = source.getDirectory(package);
+      var dir = liveSource.getDirectory(package);
       // See if the directory is there and looks like a package.
       return dirExists(dir) && fileExists(p.join(dir, "pubspec.yaml"));
     });
