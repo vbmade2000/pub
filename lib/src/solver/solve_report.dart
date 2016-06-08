@@ -18,7 +18,6 @@ import 'version_solver.dart';
 /// It's a report builder.
 class SolveReport {
   final SolveType _type;
-  final SourceRegistry _sources;
   final Package _root;
   final LockFile _previousLockFile;
   final SolveResult _result;
@@ -28,8 +27,7 @@ class SolveReport {
 
   final _output = new StringBuffer();
 
-  SolveReport(this._type, this._sources, this._root, this._previousLockFile,
-      this._result) {
+  SolveReport(this._type, this._root, this._previousLockFile, this._result) {
     // Fill the map so we can use it later.
     for (var id in _result.packages) {
       _dependencies[id.name] = id;
@@ -62,7 +60,7 @@ class SolveReport {
       if (newId == null) return true;
 
       // The dependency existed before, so see if it was modified.
-      return !_sources.idsEqual(oldId, newId);
+      return !sources.idsEqual(oldId, newId);
     }).length;
 
     if (dryRun) {
@@ -167,7 +165,7 @@ class SolveReport {
     } else if (oldId == null) {
       icon = log.green("+ ");
       addedOrRemoved = true;
-    } else if (!_sources.idDescriptionsEqual(oldId, newId)) {
+    } else if (!sources.idDescriptionsEqual(oldId, newId)) {
       icon = log.cyan("* ");
       changed = true;
     } else if (oldId.version < newId.version) {
@@ -238,8 +236,8 @@ class SolveReport {
   void _writeId(PackageId id) {
     _output.write(id.version);
 
-    var source = _sources[id.source];
-    if (source != _sources.defaultSource) {
+    var source = sources[id.source];
+    if (source != sources.defaultSource) {
       var description = source.formatDescription(_root.dir, id.description);
       _output.write(" from ${id.source} $description");
     }

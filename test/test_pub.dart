@@ -26,7 +26,6 @@ import 'package:pub/src/io.dart';
 import 'package:pub/src/lock_file.dart';
 import 'package:pub/src/log.dart' as log;
 import 'package:pub/src/package.dart';
-import 'package:pub/src/source_registry.dart';
 import 'package:pub/src/system_cache.dart';
 import 'package:pub/src/utils.dart';
 import 'package:pub/src/validator.dart';
@@ -53,8 +52,7 @@ Matcher isUnminifiedDart2JSOutput =
     contains("// The code supports the following hooks");
 
 /// The entrypoint for pub itself.
-final _entrypoint = new Entrypoint(
-    pubRoot, new SystemCache.withSources(isOffline: true));
+final _entrypoint = new Entrypoint(pubRoot, new SystemCache(isOffline: true));
 
 /// Converts [value] into a YAML string.
 String yaml(value) => JSON.encode(value);
@@ -476,15 +474,13 @@ void ensureGit() {
 void createLockFile(String package, {Iterable<String> sandbox,
     Map<String, String> hosted}) {
   schedule(() async {
-    var cache = new SystemCache.withSources(
-        rootDir: p.join(sandboxDir, cachePath));
+    var cache = new SystemCache(rootDir: p.join(sandboxDir, cachePath));
 
-    var lockFile = _createLockFile(cache.sources,
-        sandbox: sandbox, hosted: hosted);
+    var lockFile = _createLockFile(sandbox: sandbox, hosted: hosted);
 
     await d.dir(package, [
       d.file('pubspec.lock', lockFile.serialize(null)),
-      d.file('.packages', lockFile.packagesFile(package))
+      d.file('.packages', lockFile.packagesFile(cache, package))
     ]).create();
   }, "creating lockfile for $package");
 }
@@ -494,14 +490,12 @@ void createLockFile(String package, {Iterable<String> sandbox,
 void createPackagesFile(String package, {Iterable<String> sandbox,
     Map<String, String> hosted}) {
   schedule(() async {
-    var cache = new SystemCache.withSources(
-        rootDir: p.join(sandboxDir, cachePath));
+    var cache = new SystemCache(rootDir: p.join(sandboxDir, cachePath));
 
-    var lockFile = _createLockFile(cache.sources,
-        sandbox: sandbox, hosted: hosted);
+    var lockFile = _createLockFile(sandbox: sandbox, hosted: hosted);
 
     await d.dir(package, [
-      d.file('.packages', lockFile.packagesFile(package))
+      d.file('.packages', lockFile.packagesFile(cache, package))
     ]).create();
   }, "creating .packages for $package");
 }
@@ -515,8 +509,7 @@ void createPackagesFile(String package, {Iterable<String> sandbox,
 ///
 /// [hosted] is a list of package names to version strings for dependencies on
 /// hosted packages.
-LockFile _createLockFile(SourceRegistry sources, {Iterable<String> sandbox,
-    Map<String, String> hosted}) {
+LockFile _createLockFile({Iterable<String> sandbox, Map<String, String> hosted}) {
   var dependencies = {};
 
   if (sandbox != null) {
@@ -540,7 +533,7 @@ LockFile _createLockFile(SourceRegistry sources, {Iterable<String> sandbox,
     });
   }
 
-  return new LockFile(packages, sources);
+  return new LockFile(packages);
 }
 
 /// Returns the path to the version of [package] used by pub.
@@ -725,8 +718,7 @@ typedef Validator ValidatorCreator(Entrypoint entrypoint);
 Future<Pair<List<String>, List<String>>> schedulePackageValidation(
     ValidatorCreator fn) {
   return schedule(() {
-    var cache = new SystemCache.withSources(
-        rootDir: p.join(sandboxDir, cachePath));
+    var cache = new SystemCache(rootDir: p.join(sandboxDir, cachePath));
 
     return new Future.sync(() {
       var validator = fn(new Entrypoint(p.join(sandboxDir, appPath), cache));

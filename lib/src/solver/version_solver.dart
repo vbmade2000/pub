@@ -14,6 +14,7 @@ import '../log.dart' as log;
 import '../package.dart';
 import '../pubspec.dart';
 import '../source_registry.dart';
+import '../system_cache.dart';
 import '../utils.dart';
 import 'backtracking_solver.dart';
 import 'solve_report.dart';
@@ -28,13 +29,13 @@ import 'solve_report.dart';
 /// packages.
 ///
 /// If [upgradeAll] is true, the contents of [lockFile] are ignored.
-Future<SolveResult> resolveVersions(SolveType type, SourceRegistry sources,
+Future<SolveResult> resolveVersions(SolveType type, SystemCache cache,
     Package root, {LockFile lockFile, List<String> useLatest}) {
-  if (lockFile == null) lockFile = new LockFile.empty(sources);
+  if (lockFile == null) lockFile = new LockFile.empty();
   if (useLatest == null) useLatest = [];
 
   return log.progress('Resolving dependencies', () {
-    return new BacktrackingSolver(type, sources, root, lockFile, useLatest)
+    return new BacktrackingSolver(type, cache, root, lockFile, useLatest)
         .solve();
   });
 }
@@ -82,10 +83,9 @@ class SolveResult {
         .where((pubspec) =>
             !_root.dependencyOverrides.any((dep) => dep.name == pubspec.name))
         .map((pubspec) => pubspec.environment.sdkVersion));
-    return new LockFile(packages, _sources, sdkConstraint: sdkConstraint);
+    return new LockFile(packages, sdkConstraint: sdkConstraint);
   }
 
-  final SourceRegistry _sources;
   final Package _root;
   final LockFile _previousLockFile;
 
@@ -97,7 +97,7 @@ class SolveResult {
 
     var changed = packages
         .where((id) =>
-            !_sources.idsEqual(_previousLockFile.packages[id.name], id))
+            !sources.idsEqual(_previousLockFile.packages[id.name], id))
         .map((id) => id.name).toSet();
 
     return changed.union(_previousLockFile.packages.keys
@@ -105,12 +105,12 @@ class SolveResult {
         .toSet());
   }
 
-  SolveResult.success(this._sources, this._root, this._previousLockFile,
+  SolveResult.success(this._root, this._previousLockFile,
       this.packages, this.overrides, this.pubspecs, this.availableVersions,
       this.attemptedSolutions)
       : error = null;
 
-  SolveResult.failure(this._sources, this._root, this._previousLockFile,
+  SolveResult.failure(this._root, this._previousLockFile,
       this.overrides, this.error, this.attemptedSolutions)
       : this.packages = null,
         this.pubspecs = null,
@@ -120,7 +120,7 @@ class SolveResult {
   ///
   /// [type] is the type of version resolution that was run.
   void showReport(SolveType type) {
-    new SolveReport(type, _sources, _root, _previousLockFile, this).show();
+    new SolveReport(type, _root, _previousLockFile, this).show();
   }
 
   /// Displays a one-line message summarizing what changes were made (or would
@@ -128,7 +128,7 @@ class SolveResult {
   ///
   /// [type] is the type of version resolution that was run.
   void summarizeChanges(SolveType type, {bool dryRun: false}) {
-    new SolveReport(type, _sources, _root, _previousLockFile, this)
+    new SolveReport(type, _root, _previousLockFile, this)
         .summarize(dryRun: dryRun);
   }
 
@@ -145,7 +145,7 @@ class SolveResult {
 
 /// Maintains a cache of previously-requested version lists.
 class SolverCache {
-  final SourceRegistry _sources;
+  final SystemCache _cache;
 
   /// The already-requested cached version lists.
   final _versions = new Map<PackageRef, List<PackageId>>();
@@ -164,7 +164,7 @@ class SolverCache {
   /// was returned.
   int _versionCacheHits = 0;
 
-  SolverCache(this._type, this._sources);
+  SolverCache(this._type, this._cache);
 
   /// Gets the list of versions for [package].
   ///
@@ -195,7 +195,7 @@ class SolverCache {
 
     _versionCacheMisses++;
 
-    var source = _sources[package.source];
+    var source = _cache.liveSource(package.source);
     var ids;
     try {
       ids = await source.getVersions(package);

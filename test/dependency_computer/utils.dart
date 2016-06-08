@@ -10,7 +10,7 @@ import 'package:pub/src/entrypoint.dart';
 import 'package:pub/src/io.dart';
 import 'package:pub/src/package.dart';
 import 'package:pub/src/package_graph.dart';
-import 'package:pub/src/source/path.dart';
+import 'package:pub/src/source_registry.dart';
 import 'package:pub/src/system_cache.dart';
 import 'package:pub/src/utils.dart';
 import 'package:scheduled_test/scheduled_test.dart';
@@ -78,23 +78,20 @@ PackageGraph _loadPackageGraph() {
   // Load the sandbox packages.
   var packages = {};
 
-  var systemCache = new SystemCache(p.join(sandboxDir, cachePath));
-  systemCache.sources
-      ..register(new PathSource())
-      ..setDefault('path');
+  sources.setDefault('path');
+  var systemCache = new SystemCache(rootDir: p.join(sandboxDir, cachePath));
   var entrypoint = new Entrypoint(p.join(sandboxDir, appPath), systemCache);
 
   for (var package in listDir(sandboxDir)) {
     if (!fileExists(p.join(package, 'pubspec.yaml'))) continue;
     var packageName = p.basename(package);
-    packages[packageName] = new Package.load(
-        packageName, package, systemCache.sources);
+    packages[packageName] = new Package.load(packageName, package);
   }
 
   loadPackage(packageName) {
     if (packages.containsKey(packageName)) return;
     packages[packageName] = new Package.load(
-        packageName, packagePath(packageName), systemCache.sources);
+        packageName, packagePath(packageName));
     for (var dep in packages[packageName].dependencies) {
       loadPackage(dep.name);
     }

@@ -21,6 +21,7 @@ import 'sdk.dart' as sdk;
 import 'solver/version_solver.dart';
 import 'source/cached.dart';
 import 'source/unknown.dart';
+import 'source_registry.dart';
 import 'system_cache.dart';
 import 'utils.dart';
 
@@ -70,9 +71,9 @@ class Entrypoint {
     if (_lockFile != null) return _lockFile;
 
     if (!fileExists(lockFilePath)) {
-      _lockFile = new LockFile.empty(cache.sources);
+      _lockFile = new LockFile.empty();
     } else {
-      _lockFile = new LockFile.load(lockFilePath, cache.sources);
+      _lockFile = new LockFile.load(lockFilePath);
     }
 
     return _lockFile;
@@ -90,7 +91,7 @@ class Entrypoint {
     assertUpToDate();
     var packages = new Map.fromIterable(lockFile.packages.values,
         key: (id) => id.name,
-        value: (id) => cache.sources.load(id));
+        value: (id) => cache.load(id));
     packages[root.name] = root;
 
     _packageGraph = new PackageGraph(this, lockFile, packages);
@@ -127,7 +128,7 @@ class Entrypoint {
   /// into any directory that might contain an entrypoint.
   Entrypoint(String rootDir, SystemCache cache, {bool packageSymlinks: true,
           this.isGlobal: false})
-      : root = new Package.load(null, rootDir, cache.sources),
+      : root = new Package.load(null, rootDir),
         cache = cache,
         _packageSymlinks = packageSymlinks,
         _inMemory = false;
@@ -169,7 +170,7 @@ class Entrypoint {
   /// Updates [lockFile] and [packageRoot] accordingly.
   Future acquireDependencies(SolveType type, {List<String> useLatest,
       bool dryRun: false, bool precompile: true}) async {
-    var result = await resolveVersions(type, cache.sources, root,
+    var result = await resolveVersions(type, cache, root,
         lockFile: lockFile, useLatest: useLatest);
     if (!result.succeeded) throw result.error;
 
@@ -217,7 +218,7 @@ class Entrypoint {
       log.exception(error, stackTrace);
     }
 
-    writeTextFile(packagesFile, lockFile.packagesFile(root.name));
+    writeTextFile(packagesFile, lockFile.packagesFile(cache, root.name));
   }
 
   /// Precompile any transformed dependencies of the entrypoint.
@@ -432,7 +433,7 @@ class Entrypoint {
   Future _get(PackageId id) async {
     if (id.isRoot) return;
 
-    var source = cache.sources[id.source];
+    var source = cache.liveSource(id.source);
     if (!_packageSymlinks) {
       if (source is CachedSource) await source.downloadToSystemCache(id);
       return;
@@ -516,11 +517,11 @@ class Entrypoint {
     // Check that uncached dependencies' pubspecs are also still satisfied,
     // since they're mutable and may have changed since the last get.
     for (var id in lockFile.packages.values) {
-      var source = cache.sources[id.source];
+      var source = cache.liveSource(id.source);
       if (source is CachedSource) continue;
 
       try {
-        if (cache.sources.load(id).dependencies.every((dep) =>
+        if (cache.load(id).dependencies.every((dep) =>
             overrides.contains(dep.name) || _isDependencyUpToDate(dep))) {
           continue;
         }
@@ -545,18 +546,15 @@ class Entrypoint {
 
     if (!dep.constraint.allows(locked.version)) return false;
 
-    var source = cache.sources[dep.source];
-    if (source == null) return false;
-
-    return source.descriptionsEqual(dep.description, locked.description);
+    return sources[dep.source].descriptionsEqual(dep.description, locked.description);
   }
 
   /// Determines whether all of the packages in the lockfile are already
   /// installed and available.
   bool _arePackagesAvailable() {
     return lockFile.packages.values.every((package) {
-      var source = cache.sources[package.source];
-      if (source is UnknownSource) return false;
+      var source = cache.liveSource(package.source);
+      if (source.source is UnknownSource) return false;
 
       // We only care about cached sources. Uncached sources aren't "installed".
       // If one of those is missing, we want to show the user the file not
@@ -581,7 +579,7 @@ class Entrypoint {
         p.toUri(packagesFile));
 
     return lockFile.packages.values.every((lockFileId) {
-      var source = cache.sources[lockFileId.source];
+      var source = cache.liveSource(lockFileId.source);
 
       // It's very unlikely that the lockfile is invalid here, but it's not
       // impossible—for example, the user may have a very old application

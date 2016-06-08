@@ -12,7 +12,6 @@ import 'barback/transformer_id.dart';
 import 'io.dart';
 import 'git.dart' as git;
 import 'pubspec.dart';
-import 'source_registry.dart';
 import 'utils.dart';
 
 final _README_REGEXP = new RegExp(r"^README($|\.)", caseSensitive: false);
@@ -131,9 +130,9 @@ class Package {
   /// [name] is the expected name of that package (e.g. the name given in the
   /// dependency), or `null` if the package being loaded is the entrypoint
   /// package.
-  Package.load(String name, String packageDir, SourceRegistry sources)
+  Package.load(String name, String packageDir)
       : dir = packageDir,
-        pubspec = new Pubspec.load(packageDir, sources, expectedName: name);
+        pubspec = new Pubspec.load(packageDir, expectedName: name);
 
   /// Constructs a package with the given pubspec.
   ///

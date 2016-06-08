@@ -33,13 +33,6 @@ class Pubspec {
   // initialization can throw a [PubspecException], that error should also be
   // exposed through [allErrors].
 
-  /// The registry of sources to use when parsing [dependencies] and
-  /// [devDependencies].
-  ///
-  /// This will be null if this was created using [new Pubspec] or [new
-  /// Pubspec.empty].
-  final SourceRegistry _sources;
-
   /// The location from which the pubspec was loaded.
   ///
   /// This can be null if the pubspec was created in-memory or if its location
@@ -337,8 +330,7 @@ class Pubspec {
   ///
   /// If [expectedName] is passed and the pubspec doesn't have a matching name
   /// field, this will throw a [PubspecError].
-  factory Pubspec.load(String packageDir, SourceRegistry sources,
-      {String expectedName}) {
+  factory Pubspec.load(String packageDir, {String expectedName}) {
     var pubspecPath = path.join(packageDir, 'pubspec.yaml');
     var pubspecUri = path.toUri(pubspecPath);
     if (!fileExists(pubspecPath)) {
@@ -350,7 +342,7 @@ class Pubspec {
           pubspecPath);
     }
 
-    return new Pubspec.parse(readTextFile(pubspecPath), sources,
+    return new Pubspec.parse(readTextFile(pubspecPath),
         expectedName: expectedName, location: pubspecUri);
   }
 
@@ -359,7 +351,7 @@ class Pubspec {
           Iterable<PackageDep> dependencyOverrides,
           VersionConstraint sdkConstraint,
           Iterable<Iterable<TransformerConfig>> transformers,
-          Map fields, SourceRegistry sources})
+          Map fields})
       : _version = version,
         _dependencies = dependencies == null ? null : dependencies.toList(),
         _devDependencies = devDependencies == null ? null :
@@ -369,12 +361,10 @@ class Pubspec {
         _environment = new PubspecEnvironment(sdkConstraint),
         _transformers = transformers == null ? [] :
             transformers.map((phase) => phase.toSet()).toList(),
-        fields = fields == null ? new YamlMap() : new YamlMap.wrap(fields),
-        _sources = sources;
+        fields = fields == null ? new YamlMap() : new YamlMap.wrap(fields);
 
   Pubspec.empty()
-    : _sources = null,
-      _name = null,
+    : _name = null,
       _version = Version.none,
       _dependencies = <PackageDep>[],
       _devDependencies = <PackageDep>[],
@@ -389,8 +379,7 @@ class Pubspec {
   /// field, this will throw a [PubspecError].
   ///
   /// [location] is the location from which this pubspec was loaded.
-  Pubspec.fromMap(Map fields, this._sources, {String expectedName,
-      Uri location})
+  Pubspec.fromMap(Map fields, {String expectedName, Uri location})
       : fields = fields is YamlMap ? fields :
             new YamlMap.wrap(fields, sourceUrl: location) {
     // If [expectedName] is passed, ensure that the actual 'name' field exists
@@ -406,8 +395,7 @@ class Pubspec {
   ///
   /// If the pubspec doesn't define a version for itself, it defaults to
   /// [Version.none].
-  factory Pubspec.parse(String contents, SourceRegistry sources,
-      {String expectedName, Uri location}) {
+  factory Pubspec.parse(String contents, {String expectedName, Uri location}) {
     var pubspecNode = loadYamlNode(contents, sourceUrl: location);
     if (pubspecNode is YamlScalar && pubspecNode.value == null) {
       pubspecNode = new YamlMap(sourceUrl: location);
@@ -416,7 +404,7 @@ class Pubspec {
           'The pubspec must be a YAML mapping.', pubspecNode.span);
     }
 
-    return new Pubspec.fromMap(pubspecNode, sources,
+    return new Pubspec.fromMap(pubspecNode,
         expectedName: expectedName, location: location);
   }
 
@@ -476,10 +464,10 @@ class Pubspec {
       var versionConstraint = new VersionRange();
       if (spec == null) {
         descriptionNode = nameNode;
-        sourceName = _sources.defaultSource.name;
+        sourceName = sources.defaultSource.name;
       } else if (spec is String) {
         descriptionNode = nameNode;
-        sourceName = _sources.defaultSource.name;
+        sourceName = sources.defaultSource.name;
         versionConstraint = _parseVersionConstraint(specNode);
       } else if (spec is Map) {
         // Don't write to the immutable YAML map.
@@ -517,7 +505,7 @@ class Pubspec {
           pubspecPath = path.fromUri(_location);
         }
 
-        return _sources[sourceName].parseRef(name, descriptionNode.value,
+        return sources[sourceName].parseRef(name, descriptionNode.value,
             containingPath: pubspecPath);
       });
 

@@ -44,9 +44,9 @@ import '../log.dart' as log;
 import '../package.dart';
 import '../pubspec.dart';
 import '../sdk.dart' as sdk;
-import '../source_registry.dart';
-import '../source/hosted.dart';
 import '../source/unknown.dart';
+import '../source_registry.dart';
+import '../system_cache.dart';
 import '../utils.dart';
 import 'version_queue.dart';
 import 'version_selection.dart';
@@ -59,7 +59,7 @@ import 'version_solver.dart';
 /// next potential solution in the case of a failure.
 class BacktrackingSolver {
   final SolveType type;
-  final SourceRegistry sources;
+  final SystemCache systemCache;
   final Package root;
 
   /// The lockfile that was present before solving.
@@ -121,17 +121,17 @@ class BacktrackingSolver {
   final Pubspec _implicitPubspec = () {
     var dependencies = [];
     barback.pubConstraints.forEach((name, constraint) {
-      dependencies.add(HostedSource.refFor(name).withConstraint(constraint));
+      dependencies.add(sources.hosted.refFor(name).withConstraint(constraint));
     });
 
     return new Pubspec("pub itself", dependencies: dependencies);
   }();
 
-  BacktrackingSolver(SolveType type, SourceRegistry sources, this.root,
+  BacktrackingSolver(SolveType type, SystemCache systemCache, this.root,
           this.lockFile, List<String> useLatest)
       : type = type,
-        sources = sources,
-        cache = new SolverCache(type, sources) {
+        systemCache = systemCache,
+        cache = new SolverCache(type, systemCache) {
     _selection = new VersionSelection(this);
 
     for (var package in useLatest) {
@@ -173,12 +173,12 @@ class BacktrackingSolver {
         pubspecs[id.name] = await _getPubspec(id);
       }
 
-      return new SolveResult.success(sources, root, lockFile, packages,
+      return new SolveResult.success(root, lockFile, packages,
           overrides, pubspecs, _getAvailableVersions(packages),
           _attemptedSolutions);
     } on SolveFailure catch (error) {
       // Wrap a failure in a result so we can attach some other data.
-      return new SolveResult.failure(sources, root, lockFile, overrides,
+      return new SolveResult.failure(root, lockFile, overrides,
           error, _attemptedSolutions);
     } finally {
       // Gather some solving metrics.
@@ -605,9 +605,7 @@ class BacktrackingSolver {
   Future<Pubspec> _getPubspec(PackageId id) async {
     if (id.isRoot) return root.pubspec;
     if (id.isMagic && id.name == 'pub itself') return _implicitPubspec;
-
-    var source = sources[id.source];
-    return await source.describe(id);
+    return await systemCache.liveSource(id.source).describe(id);
   }
 
   /// Logs the initial parameters to the solver.

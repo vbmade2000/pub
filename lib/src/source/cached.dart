@@ -12,17 +12,18 @@ import '../pubspec.dart';
 import '../source.dart';
 import '../utils.dart';
 
-/// Base class for a [Source] that installs packages into pub's [SystemCache].
+/// Base class for a [LiveSource] that installs packages into pub's
+/// [SystemCache].
 ///
 /// A source should be cached if it requires network access to retrieve
 /// packages or the package needs to be "frozen" at the point in time that it's
 /// installed. (For example, Git packages are cached because installing from
 /// the same repo over time may yield different commits.)
-abstract class CachedSource extends Source {
+abstract class CachedSource extends LiveSource {
   /// The root directory of this source's cache within the system cache.
   ///
   /// This shouldn't be overridden by subclasses.
-  String get systemCacheRoot => path.join(systemCache.rootDir, name);
+  String get systemCacheRoot => path.join(systemCache.rootDir, source.name);
 
   /// If [id] is already in the system cache, just loads it from there.
   ///
@@ -30,8 +31,7 @@ abstract class CachedSource extends Source {
   Future<Pubspec> doDescribe(PackageId id) async {
     var packageDir = getDirectory(id);
     if (fileExists(path.join(packageDir, "pubspec.yaml"))) {
-      return new Pubspec.load(packageDir, systemCache.sources,
-          expectedName: id.name);
+      return new Pubspec.load(packageDir, expectedName: id.name);
     }
 
     return await describeUncached(id);

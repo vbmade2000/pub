@@ -2,13 +2,11 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'dart:async';
-
 import 'package:pub/src/lock_file.dart';
 import 'package:pub/src/package.dart';
-import 'package:pub/src/pubspec.dart';
 import 'package:pub/src/source.dart';
 import 'package:pub/src/source_registry.dart';
+import 'package:pub/src/system_cache.dart';
 import 'package:pub_semver/pub_semver.dart';
 import 'package:test/test.dart';
 import 'package:yaml/yaml.dart';
@@ -16,17 +14,8 @@ import 'package:yaml/yaml.dart';
 class MockSource extends Source {
   final String name = 'mock';
 
-  Future<List<PackageId>> doGetVersions(PackageRef ref) =>
-      throw new UnsupportedError("Cannot get mock package versions.");
-
-  Future<Pubspec> doDescribe(PackageId id) => throw new UnsupportedError(
-      "Cannot describe mock packages.");
-
-  Future get(PackageId id, String symlink) => throw new UnsupportedError(
-      "Cannot get a mock package.");
-
-  String getDirectory(PackageId id) => throw new UnsupportedError(
-      "Cannot get the directory for mock packages.");
+  LiveSource bind(SystemCache cache) =>
+      throw new UnsupportedError("Cannot download mock packages.");
 
   PackageRef parseRef(String name, description, {String containingPath}) {
     if (!description.endsWith(' desc')) throw new FormatException('Bad');
@@ -48,19 +37,18 @@ class MockSource extends Source {
 }
 
 main() {
-  var sources = new SourceRegistry();
   var mockSource = new MockSource();
   sources.register(mockSource);
 
   group('LockFile', () {
     group('parse()', () {
       test('returns an empty lockfile if the contents are empty', () {
-        var lockFile = new LockFile.parse('', sources);
+        var lockFile = new LockFile.parse('');
         expect(lockFile.packages.length, equals(0));
       });
 
       test('returns an empty lockfile if the contents are whitespace', () {
-        var lockFile = new LockFile.parse('  \t\n  ', sources);
+        var lockFile = new LockFile.parse('  \t\n  ');
         expect(lockFile.packages.length, equals(0));
       });
 
@@ -75,7 +63,7 @@ packages:
     version: 2.3.4
     source: mock
     description: foo desc
-''', sources);
+''');
 
         expect(lockFile.packages.length, equals(2));
 
@@ -99,7 +87,7 @@ packages:
     source: bad
     version: 1.2.3
     description: foo desc
-''', sources);
+''');
         var foo = lockFile.packages['foo'];
         expect(foo.source, equals('bad'));
       });
@@ -107,7 +95,7 @@ packages:
       test("allows an empty dependency map", () {
         var lockFile = new LockFile.parse('''
 packages:
-''', sources);
+''');
         expect(lockFile.packages, isEmpty);
       });
 
@@ -115,7 +103,7 @@ packages:
         expect(() {
           new LockFile.parse('''
 not a map
-''', sources);
+''');
         }, throwsFormatException);
       });
 
@@ -123,7 +111,7 @@ not a map
         expect(() {
           new LockFile.parse('''
 packages: not a map
-''', sources);
+''');
         }, throwsFormatException);
       });
 
@@ -134,7 +122,7 @@ packages:
   foo:
     source: mock
     description: foo desc
-''', sources);
+''');
         }, throwsFormatException);
       });
 
@@ -146,7 +134,7 @@ packages:
     version: vorpal
     source: mock
     description: foo desc
-''', sources);
+''');
         }, throwsFormatException);
       });
 
@@ -157,7 +145,7 @@ packages:
   foo:
     version: 1.2.3
     description: foo desc
-''', sources);
+''');
         }, throwsFormatException);
       });
 
@@ -168,7 +156,7 @@ packages:
   foo:
     version: 1.2.3
     source: mock
-''', sources);
+''');
         }, throwsFormatException);
       });
 
@@ -180,7 +168,7 @@ packages:
     version: 1.2.3
     source: mock
     description: foo desc is bad
-''', sources);
+''');
         }, throwsFormatException);
       });
 
@@ -194,7 +182,7 @@ packages:
     version: 1.2.3
     source: mock
     description: foo desc
-''', sources);
+''');
       });
     });
 
@@ -204,7 +192,7 @@ packages:
           'foo', mockSource.name, new Version.parse('1.2.3'), 'foo desc'),
         new PackageId(
           'bar', mockSource.name, new Version.parse('3.2.1'), 'bar desc')
-      ], sources);
+      ]);
 
       expect(loadYaml(lockfile.serialize(null)), equals({
         'sdk': 'any',

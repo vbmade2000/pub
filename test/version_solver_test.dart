@@ -10,7 +10,9 @@ import 'package:pub/src/package.dart';
 import 'package:pub/src/pubspec.dart';
 import 'package:pub/src/sdk.dart' as sdk;
 import 'package:pub/src/solver/version_solver.dart';
+import 'package:pub/src/source.dart';
 import 'package:pub/src/source/cached.dart';
+import 'package:pub/src/source_registry.dart';
 import 'package:pub/src/system_cache.dart';
 import 'package:pub/src/utils.dart';
 import 'package:pub_semver/pub_semver.dart';
@@ -1109,12 +1111,13 @@ testResolve(String description, Map packages, {
   if (maxTries == null) maxTries = 1;
 
   test(description, () {
-    var cache = new SystemCache('.');
     source1 = new MockSource('mock1');
     source2 = new MockSource('mock2');
-    cache.register(source1);
-    cache.register(source2);
-    cache.sources.setDefault(source1.name);
+    sources.register(source1);
+    sources.register(source2);
+    sources.setDefault(source1.name);
+
+    var cache = new SystemCache(rootDir: '.');
 
     // Build the test package graph.
     var root;
@@ -1128,8 +1131,8 @@ testResolve(String description, Map packages, {
         // remote server.
         root = package;
       } else {
-        (cache.sources[id.source] as MockSource).addPackage(
-            id.description, package);
+        (cache.liveSource(id.source) as LiveMockSource)
+            .addPackage(id.description, package);
       }
     });
 
@@ -1146,19 +1149,19 @@ testResolve(String description, Map packages, {
     // Parse the lockfile.
     var realLockFile;
     if (lockfile == null) {
-      realLockFile = new LockFile.empty(cache.sources);
+      realLockFile = new LockFile.empty();
     } else {
       realLockFile = new LockFile(lockfile.keys.map((name) {
         var version = new Version.parse(lockfile[name]);
         return new PackageId(name, source1.name, version, name);
-      }), cache.sources);
+      }));
     }
 
     // Resolve the versions.
     log.verbosity = log.Verbosity.NONE;
     var future = resolveVersions(
         downgrade ? SolveType.DOWNGRADE : SolveType.GET,
-        cache.sources, root, lockFile: realLockFile);
+        cache, root, lockFile: realLockFile);
 
     var matcher;
     if (result != null) {
@@ -1347,7 +1350,29 @@ class SolveFailMatcher implements Matcher {
 /// descriptions, a package's name is calculated by taking the description
 /// string and stripping off any trailing hyphen followed by non-hyphen
 /// characters.
-class MockSource extends CachedSource {
+class MockSource extends Source {
+  final String name;
+  final hasMultipleVersions = true;
+
+  MockSource(this.name);
+
+  LiveSource bind(SystemCache cache) => new LiveMockSource(this, cache);
+
+  PackageRef parseRef(String name, description, {String containingPath}) =>
+      new PackageRef(name, this.name, description);
+
+  PackageId parseId(String name, Version version, description) =>
+      new PackageId(name, this.name, version, description);
+
+  bool descriptionsEqual(description1, description2) =>
+      description1 == description2;
+}
+
+class LiveMockSource extends CachedSource {
+  final SystemCache systemCache;
+
+  final MockSource source;
+
   final _packages = <String, Map<Version, Package>>{};
 
   /// Keeps track of which package version lists have been requested. Ensures
@@ -1360,19 +1385,7 @@ class MockSource extends CachedSource {
   /// caches the results.
   final _requestedPubspecs = new Map<String, Set<Version>>();
 
-  final String name;
-  final hasMultipleVersions = true;
-
-  MockSource(this.name);
-
-  PackageRef parseRef(String name, description, {String containingPath}) =>
-      new PackageRef(name, this.name, description);
-
-  PackageId parseId(String name, Version version, description) =>
-      new PackageId(name, this.name, version, description);
-
-  bool descriptionsEqual(description1, description2) =>
-      description1 == description2;
+  LiveMockSource(this.source, this.systemCache);
 
   String getDirectory(PackageId id) => '${id.name}-${id.version}';
 
@@ -1392,7 +1405,7 @@ class MockSource extends CachedSource {
 
     return _packages[ref.description].values.map((package) {
       return new PackageId(
-          ref.name, this.name, package.version, ref.description);
+          ref.name, source.name, package.version, ref.description);
     }).toList();
   }
 
