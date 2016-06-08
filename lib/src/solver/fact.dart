@@ -34,6 +34,8 @@ class Required implements Fact {
 
   Required(this.dep, [Iterable<Cause> causes])
       : causes = causes?.toList() ?? [Cause.rootDependency];
+
+  String toString() => "$dep is required";
 }
 
 /// No package versions covered by [dep] can ever be selected.
@@ -44,6 +46,8 @@ class Disallowed implements Fact {
 
   Disallowed(this.dep, Iterable<Cause> causes)
       : causes = causes.toList();
+
+  String toString() => "$dep is forbidden";
 }
 
 /// All versions covered by [depender] require a version covered by [allowed].
@@ -58,6 +62,8 @@ class Dependency implements Fact {
       : causes = causes?.toList() ?? [Cause.explicitDependency] {
     assert(depender.name != allowed.name);
   }
+
+  String toString() => "$depender depends on $allowed";
 }
 
 /// No versions covered by [package1] may be selected along with any versions
@@ -72,4 +78,6 @@ class Incompatibility implements Fact {
       : causes = causes.toList() {
     assert(dep1.name != dep2.name);
   }
+
+  String toString() => "$dep1 is incompatible with $dep2";
 }

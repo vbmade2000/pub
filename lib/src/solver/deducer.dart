@@ -4,9 +4,10 @@
 
 import 'dart:collection';
 
-import '../package.dart';
 import 'package:collection/collection.dart';
+import 'package:pub_semver/pub_semver.dart';
 
+import '../package.dart';
 import 'constraint_maximizer.dart';
 import 'fact.dart';
 
@@ -467,18 +468,27 @@ class Deducer {
         // * a [3, 4) depends on b [1, 3)
         _removeDependency(dependency);
 
-        // Add the new dependencies to [_toProcess] so they don't get thrown
-        // away when we return `false`.
-        _toProcess.add(new Dependency(
-            _intersectDeps(dependency.depender, fact.depender),
-            _intersectDeps(dependency.allowed, fact.allowed),
-            [dependency, fact]));
+        var dependencyIntersection =
+            _intersectDeps(dependency.depender, fact.depender);
+        var allowedIntersection =
+            _intersectDeps(dependency.allowed, fact.allowed);
+        if (allowedIntersection == null) {
+          // If there's no overlapping allowed versions, then the interesecting
+          // dependency is just disallowed entirely.
+          _replaceCurrent(
+              new Disallowed(dependencyIntersection, [dependency, fact]));
+        } else {
+          _replaceCurrent(new Dependency(
+              dependencyIntersection,
+              allowedIntersection,
+              [dependency, fact]));
+        }
 
         var dependencyDifference = _depMinus(dependency.depender, fact.depender);
         if (dependencyDifference != null) {
           // Unless [fact] covers the entirety of [dependency], trim
           // [dependency] to exclude the intersection.
-          _toProcess.add(new Dependency(
+          _replaceCurrent(new Dependency(
               dependencyDifference, dependency.allowed, [dependency, fact]));
         }
 
@@ -486,7 +496,7 @@ class Deducer {
         if (factDifference != null) {
           // Unless [dependency] covers the entirety of [fact], trim [fact] to
           // exclude the intersection.
-          _toProcess.add(new Dependency(
+          _replaceCurrent(new Dependency(
               factDifference, fact.allowed, [dependency, fact]));
         }
 
@@ -494,23 +504,41 @@ class Deducer {
       }
     }
 
-    // Merge [fact] with dependencies *from* [fact.allowed] to see if we can
-    // deduce anything about transitive dependencies. For example, if
-    //
-    // * a [0, 1) depends on b [0, 2) (fact)
-    // * b [0, 1) depends on c [0, 1) (in byAllowed)
-    // * b [1, 2) depends on c [1, 2) (in byAllowed)
-    //
-    // we can add
-    //
-    // * a [0, 1) depends on c [0, 2)
+    // A map containing all dependencies from [fact.allowed] onto other
+    // packages, indexed by their `allowed` packages.
     var dependencyByAllowed = groupBy(
         _dependenciesByDepender
             .putIfAbsent(fact.allowed.toRef(), () => new Set())
             .where((dependency) => fact.allowed.constraint.allowsAny(
                 dependency.depender.constraint)),
         (dependency) => dependency.allowed.toRef());
+
+    // Check if there's a circular dependency between [fact.allowed] and
+    // [fact.depender].
+    var reverse = dependencyByAllowed.remove(fact.depender.toRef());
+    if (reverse != null) {
+      var disallowed = _dependencyAndReverse(fact, reverse);
+      if (disallowed != null) {
+        if (disallowed.dep.constraint == fact.depender.constraint) {
+          _toProcess.add(disallowed);
+          return false;
+        } else {
+          _fromCurrent.add(disallowed);
+        }
+      }
+    }
+
     for (var dependencies in dependencyByAllowed.values) {
+      // Merge [fact] with dependencies *from* [fact.allowed] to see if we can
+      // deduce anything about transitive dependencies. For example, if
+      //
+      // * a [0, 1) depends on b [0, 2) (fact)
+      // * b [0, 1) depends on c [0, 1) (in byAllowed)
+      // * b [1, 2) depends on c [1, 2) (in byAllowed)
+      //
+      // we can add
+      //
+      // * a [0, 1) depends on c [0, 2)
       var allowed = _transitiveAllowed(fact.allowed, dependencies);
       if (allowed == null) continue;
 
@@ -538,7 +566,15 @@ class Deducer {
           .where((sibling) => dependency.allowed.constraint
               .allowsAny(sibling.depender.constraint))
           .toList()..add(fact);
-      var allowed = _transitiveAllowed(fact.allowed, relevant);
+
+      // Handle circular dependencies.
+      if (dependency.depender.samePackage(fact.allowed)) {
+        var disallowed = _dependencyAndReverse(dependency, relevant);
+        if (disallowed != null) _fromCurrent.add(disallowed);
+        continue;
+      }
+
+      var allowed = _transitiveAllowed(fact.depender, relevant);
       if (allowed == null) continue;
 
       _fromCurrent.add(new Dependency(
@@ -873,7 +909,7 @@ class Deducer {
       //
       // we can throw away [dependency].
       return null;
-    } else if (trimmed == dependency.depender.constraint) {
+    } else if (trimmed.constraint == dependency.depender.constraint) {
       // If no versions in [dependency.depender] are covered by [disallowed],
       // the dependency is fine as-is. For example, if
       //
@@ -920,7 +956,7 @@ class Deducer {
       //
       // * b [0, 1) is disallowed
       return new Disallowed(dependency.depender, [dependency, disallowed]);
-    } else if (trimmed == dependency.depender.constraint) {
+    } else if (trimmed.constraint == dependency.allowed.constraint) {
       // If no versions in [dependency.allowed] are covered by [disallowed],
       // the dependency is fine as-is. For example, if
       //
@@ -941,7 +977,7 @@ class Deducer {
       //
       // * b [0, 1) depends on a [1, 2)
       return new Dependency(
-          trimmed, dependency.allowed, [dependency, disallowed]);
+          dependency.depender, trimmed, [dependency, disallowed]);
     }
   }
 
@@ -1034,6 +1070,56 @@ class Deducer {
       // * a [0, 1) is incompatible with b [0, 1)
       return new Incompatibility(
           trimmed, different, [incompatibility, disallowed]);
+    }
+  }
+
+  /// Handle a circular dependency.
+  ///
+  /// This assumes that [dependency.depender] refers to the same package as all
+  /// `allowed` packages in [reverse], and that [dependency.allowed] refers to
+  /// the same package as all `depender` packages in [reverse].
+  ///
+  /// Returns either a [Disallowed] that covers [dependency.depender], or `null`
+  /// indicating that no versions should be disallowed.
+  Disallowed _dependencyAndReverse(Dependency dependency,
+      Iterable<Dependency> reverse) {
+    var allowed = _transitiveAllowed(dependency.allowed, reverse);
+    if (allowed == null) return null;
+
+    var intersection = _intersectDeps(dependency.depender, allowed);
+    if (intersection == null) {
+      // If [allowed] doesn't allow any versions of [fact.depender], we can
+      // disallow the whole thing. For example, if
+      //
+      // * a [0, 1) depends on b [0, 1) (dependency)
+      // * b [0, 1) depends on a [1, 2) (in reverse)
+      //
+      // we can add
+      //
+      // * a [0, 1) is disallowed
+      return new Disallowed(
+          dependency.depender, reverse.toList()..add(dependency));
+    } else if (intersection.constraint == dependency.depender.constraint) {
+      // If [allowed] allows all versions of [dependency.depender], we don't
+      // need to do anything. For example, if
+      //
+      // * a [0, 1) depends on b [0, 1) (dependency)
+      // * b [0, 1) depends on a [0, 2) (in reverse)
+      //
+      // there are no changes to be made.
+      return null;
+    } else {
+      // If [allowed] allows some but not all versions of [dependency.depender],
+      // we can disallow some versions of [dependency]. For example, if
+      //
+      // * a [0, 2) depends on b [0, 1) (dependency)
+      // * b [0, 1) depends on a [0, 1) (in reverse)
+      //
+      // we can add
+      //
+      // * a [1, 2) is disallowed
+      return new Dependency(
+          intersection, dependency.allowed, reverse.toList()..add(dependency));
     }
   }
 
@@ -1179,8 +1265,14 @@ class Deducer {
       if (!dep.samePackage(ref)) return null;
     }
 
-    return ref.withConstraint(
-        _maximizers[ref].maximize(list.map((dep) => dep.constraint)));
+    var maximizer = _maximizers[ref];
+    var constraints = list.map((dep) => dep.constraint);
+    if (maximizer == null) {
+      // There aren't maximizers for deps with invalid sources.
+      return ref.withConstraint(new VersionConstraint.unionOf(constraints));
+    } else {
+      return ref.withConstraint(maximizer.maximize(constraints));
+    }
   }
 
   // Intersect [deps], return `null` if they aren't compatible (diff name, diff
