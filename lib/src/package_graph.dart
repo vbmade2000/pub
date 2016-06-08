@@ -48,7 +48,7 @@ class PackageGraph {
       if (id.name == entrypoint.root.name) return entrypoint.root;
 
       return new Package(result.pubspecs[id.name],
-          entrypoint.cache.liveSource(id.source).getDirectory(id));
+          entrypoint.cache.live(id.source).getDirectory(id));
     });
 
     return new PackageGraph(entrypoint, result.lockFile, packages);
@@ -125,7 +125,7 @@ class PackageGraph {
     var id = lockFile.packages[package];
     if (id == null) return true;
 
-    if (entrypoint.cache.liveSource(id.source) is! CachedSource) return true;
+    if (entrypoint.cache.live(id.source) is! CachedSource) return true;
 
     return transitiveDependencies(package).any((dep) {
       var depId = lockFile.packages[dep.name];
@@ -134,7 +134,7 @@ class PackageGraph {
       // mutable.
       if (depId == null) return true;
 
-      return entrypoint.cache.liveSource(depId.source) is! CachedSource;
+      return entrypoint.cache.live(depId.source) is! CachedSource;
     });
   }
 
@@ -149,7 +149,7 @@ class PackageGraph {
   bool isPackageStatic(String package) {
     var id = lockFile.packages[package];
     if (id == null) return false;
-    if (entrypoint.cache.liveSource(id.source) is! CachedSource) return false;
+    if (entrypoint.cache.live(id.source) is! CachedSource) return false;
     return packages[package].pubspec.transformers.isEmpty;
   }
 }

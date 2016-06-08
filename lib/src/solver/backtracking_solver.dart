@@ -227,10 +227,7 @@ class BacktrackingSolver {
     // can't be downgraded.
     if (type == SolveType.DOWNGRADE) {
       var locked = lockFile.packages[package];
-      if (locked != null &&
-          !systemCache.sources[locked.source].hasMultipleVersions) {
-        return locked;
-      }
+      if (locked != null && !locked.source.hasMultipleVersions) return locked;
     }
 
     if (_forceLatest.isEmpty || _forceLatest.contains(package)) return null;
@@ -255,13 +252,7 @@ class BacktrackingSolver {
     }
 
     var required = _selection.getRequiredDependency(name);
-    if (required != null) {
-      if (package.source != required.dep.source) return null;
-
-      var source = systemCache.sources[package.source];
-      if (!source.descriptionsEqual(
-          package.description, required.dep.description)) return null;
-    }
+    if (required != null && !package.samePackage(required.dep)) return null;
 
     return package;
   }
@@ -532,9 +523,7 @@ class BacktrackingSolver {
         throw new SourceMismatchException(dep.name, allDeps);
       }
 
-      var source = systemCache.sources[dep.source];
-      if (!source.descriptionsEqual(
-          dep.description, required.dep.description)) {
+      if (!dep.samePackage(required.dep)) {
         // Mark the dependers as failing rather than the package itself, because
         // no version with this description will be compatible.
         for (var otherDep in _selection.getDependenciesOn(dep.name)) {
@@ -591,7 +580,7 @@ class BacktrackingSolver {
 
     // Make sure the package doesn't have any bad dependencies.
     for (var dep in deps.toSet()) {
-      if (!dep.isRoot && systemCache.sources[dep.source] is UnknownSource) {
+      if (!dep.isRoot && dep.source is UnknownSource) {
         throw new UnknownSourceException(id.name, [new Dependency(id, dep)]);
       }
 
@@ -607,7 +596,7 @@ class BacktrackingSolver {
   Future<Pubspec> _getPubspec(PackageId id) async {
     if (id.isRoot) return root.pubspec;
     if (id.isMagic && id.name == 'pub itself') return _implicitPubspec;
-    return await systemCache.liveSource(id.source).describe(id);
+    return await systemCache.live(id.source).describe(id);
   }
 
   /// Logs the initial parameters to the solver.

@@ -44,7 +44,7 @@ class CacheRepairCommand extends PubCommand {
 
       for (var id in failures) {
         buffer.write("- ${log.bold(id.name)} ${id.version}");
-        if (cache.sources[id.source] != cache.sources.defaultSource) {
+        if (id.source != cache.sources.defaultSource) {
           buffer.write(" from ${id.source}");
         }
         buffer.writeln();

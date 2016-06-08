@@ -53,7 +53,7 @@ class CacheAddCommand extends PubCommand {
     }
 
     // TODO(rnystrom): Support installing from git too.
-    var source = cache.liveSource("hosted");
+    var source = cache.hosted;
 
     // TODO(rnystrom): Allow specifying the server.
     var ids = (await source.getVersions(cache.sources.hosted.refFor(package)))
