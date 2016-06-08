@@ -366,7 +366,7 @@ class Deducer {
     var byDepender = _dependenciesByDepender.putIfAbsent(
         fact.depender.toRef(), () => new Set());
     for (var dependency in byDepender.toList()) {
-      if (dependency.allowed.toRef() != fact.allowed.toRef()) continue;
+      if (!dependency.allowed.samePackage(fact.allowed)) continue;
 
       if (dependency.allowed == fact.allowed) {
         var merged = _mergeDeps([dependency.depender, fact.depender]);
@@ -551,7 +551,7 @@ class Deducer {
   bool _dependencyIntoRequired(Dependency fact) {
     var required = _required[fact.depender.name];
     if (required != null) {
-      if (required.dep.toRef() != fact.depender.toRef()) return false;
+      if (!required.dep.samePackage(fact.depender)) return false;
 
       // Trim [fact] or throw it away if it's irrelevant. For example, if
       //
@@ -587,7 +587,7 @@ class Deducer {
       // * b [0, 2) is required
       var allowedRef = fact.allowed.toRef();
       var siblings = _dependenciesByDepender[fact.depender.toRef()]
-          .where((dependency) => dependency.allowed.toRef() == allowedRef)
+          .where((dependency) => dependency.allowed.samePackage(allowedRef))
           .toList()..add(fact);
       var allowed = _transitiveAllowed(required.dep, siblings);
       if (allowed != null) {
@@ -744,8 +744,8 @@ class Deducer {
     var ref2 = fact.dep2.toRef();
     var siblings = _incompatibilities[ref1]
         .where((incompatibility) =>
-            incompatibility.dep1.toRef() == ref2 ||
-            incompatibility.dep2.toRef() == ref2)
+            incompatibility.dep1.samePackage(ref2) ||
+            incompatibility.dep2.samePackage(ref2))
         .toList()..add(fact);
 
     // If there are dependencies whose allowed constraints are covered entirely
@@ -786,7 +786,7 @@ class Deducer {
   // Returns a trimmed copy of [required], or `null` if it had no overlap with
   // [disallowed].
   Required _requiredAndDisallowed(Required required, Disallowed disallowed) {
-    assert(required.dep.toRef() == disallowed.dep.toRef());
+    assert(required.dep.samePackage(disallowed.dep));
 
     var difference = required.dep.constraint.difference(
         disallowed.dep.constraint);
@@ -1093,7 +1093,7 @@ class Deducer {
     // for all versions covered by [depender], we may be able to deduce a new
     // fact.
     var mergedDepender = _mergeDeps(dependencies.map((dependency) {
-      assert(dependency.depender.toRef() == depender.toRef());
+      assert(dependency.depender.samePackage(depender));
       return dependency.depender;
     }));
     if (mergedDepender == null ||
@@ -1176,7 +1176,7 @@ class Deducer {
 
     var ref = list.first.toRef();
     for (var dep in list.skip(1)) {
-      if (dep.toRef() != ref) return null;
+      if (!dep.samePackage(ref)) return null;
     }
 
     return ref.withConstraint(
@@ -1188,7 +1188,7 @@ class Deducer {
   //
   // Doesn't need to reduce gaps if everything's already maximized.
   PackageDep _intersectDeps(PackageDep dep1, PackageDep dep2) {
-    if (dep1.toRef() != dep2.toRef()) return null;
+    if (!dep1.samePackage(dep2)) return null;
     var intersection = dep1.constraint.intersect(dep2.constraint);
     return intersection.isEmpty ? null : dep1.withConstraint(intersection);
   }
@@ -1196,7 +1196,7 @@ class Deducer {
   // Returns packages allowed by [minuend] but not also [subtrahend]. `null` if
   // the resulting constraint is empty.
   PackageDep _depMinus(PackageDep minuend, PackageDep subtrahend) {
-    if (minuend.toRef() != subtrahend.toRef()) return minuend;
+    if (!minuend.samePackage(subtrahend)) return minuend;
     var difference = minuend.constraint.difference(subtrahend.constraint);
     return difference.isEmpty ? null : minuend.withConstraint(difference);
   }
