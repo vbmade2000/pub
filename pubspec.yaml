@@ -38,6 +38,3 @@ dev_dependencies:
 
 environment:
   sdk: ">=1.11.0 <2.0.0"
-
-dependency_overrides:
-  pub_semver: {path: ../pkg/pub_semver}
