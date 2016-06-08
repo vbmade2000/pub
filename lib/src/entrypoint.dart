@@ -70,7 +70,7 @@ class Entrypoint {
     if (_lockFile != null) return _lockFile;
 
     if (!fileExists(lockFilePath)) {
-      _lockFile = new LockFile.empty(cache.sources);
+      _lockFile = new LockFile.empty();
     } else {
       _lockFile = new LockFile.load(lockFilePath, cache.sources);
     }
@@ -90,7 +90,7 @@ class Entrypoint {
     assertUpToDate();
     var packages = new Map.fromIterable(lockFile.packages.values,
         key: (id) => id.name,
-        value: (id) => cache.sources.load(id));
+        value: (id) => cache.load(id));
     packages[root.name] = root;
 
     _packageGraph = new PackageGraph(this, lockFile, packages);
@@ -169,7 +169,7 @@ class Entrypoint {
   /// Updates [lockFile] and [packageRoot] accordingly.
   Future acquireDependencies(SolveType type, {List<String> useLatest,
       bool dryRun: false, bool precompile: true}) async {
-    var result = await resolveVersions(type, cache.sources, root,
+    var result = await resolveVersions(type, cache, root,
         lockFile: lockFile, useLatest: useLatest);
     if (!result.succeeded) throw result.error;
 
@@ -217,7 +217,7 @@ class Entrypoint {
       log.exception(error, stackTrace);
     }
 
-    writeTextFile(packagesFile, lockFile.packagesFile(root.name));
+    writeTextFile(packagesFile, lockFile.packagesFile(cache, root.name));
   }
 
   /// Precompile any transformed dependencies of the entrypoint.
@@ -432,7 +432,7 @@ class Entrypoint {
   Future _get(PackageId id) async {
     if (id.isRoot) return;
 
-    var source = cache.sources[id.source];
+    var source = cache.live(id.source);
     if (!_packageSymlinks) {
       if (source is CachedSource) await source.downloadToSystemCache(id);
       return;
@@ -516,11 +516,11 @@ class Entrypoint {
     // Check that uncached dependencies' pubspecs are also still satisfied,
     // since they're mutable and may have changed since the last get.
     for (var id in lockFile.packages.values) {
-      var source = cache.sources[id.source];
+      var source = cache.live(id.source);
       if (source is CachedSource) continue;
 
       try {
-        if (cache.sources.load(id).dependencies.every((dep) =>
+        if (cache.load(id).dependencies.every((dep) =>
             overrides.contains(dep.name) || _isDependencyUpToDate(dep))) {
           continue;
         }
@@ -539,28 +539,19 @@ class Entrypoint {
     if (dep.name == root.name) return true;
 
     var locked = lockFile.packages[dep.name];
-    if (locked == null) return false;
-
-    if (dep.source != locked.source) return false;
-
-    if (!dep.constraint.allows(locked.version)) return false;
-
-    var source = cache.sources[dep.source];
-    if (source == null) return false;
-
-    return source.descriptionsEqual(dep.description, locked.description);
+    return locked != null && dep.allowsID(locked);
   }
 
   /// Determines whether all of the packages in the lockfile are already
   /// installed and available.
   bool _arePackagesAvailable() {
     return lockFile.packages.values.every((package) {
-      var source = cache.sources[package.source];
-      if (source is UnknownSource) return false;
+      if (package.source is UnknownSource) return false;
 
       // We only care about cached sources. Uncached sources aren't "installed".
       // If one of those is missing, we want to show the user the file not
       // found error later since installing won't accomplish anything.
+      var source = cache.live(package.source);
       if (source is! CachedSource) return true;
 
       // Get the directory.
@@ -581,13 +572,11 @@ class Entrypoint {
         p.toUri(packagesFile));
 
     return lockFile.packages.values.every((lockFileId) {
-      var source = cache.sources[lockFileId.source];
-
       // It's very unlikely that the lockfile is invalid here, but it's not
       // impossible—for example, the user may have a very old application
       // package with a checked-in lockfile that's newer than the pubspec, but
       // that contains sdk dependencies.
-      if (source == null) return false;
+      if (lockFileId.source is UnknownSource) return false;
 
       var packagesFileUri = packages[lockFileId.name];
       if (packagesFileUri == null) return false;
@@ -597,6 +586,8 @@ class Entrypoint {
           packagesFileUri.scheme.isNotEmpty) {
         return false;
       }
+
+      var source = cache.live(lockFileId.source);
 
       // Get the dirname of the .packages path, since it's pointing to lib/.
       var packagesFilePath = p.dirname(

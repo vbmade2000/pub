@@ -12,22 +12,141 @@ import '../io.dart';
 import '../log.dart' as log;
 import '../package.dart';
 import '../pubspec.dart';
+import '../source.dart';
+import '../system_cache.dart';
 import '../utils.dart';
 import 'cached.dart';
 
 /// A package source that gets packages from Git repos.
-class GitSource extends CachedSource {
+class GitSource extends Source {
+  final name = "git";
+
+  LiveGitSource bind(SystemCache systemCache) =>
+      new LiveGitSource(this, systemCache);
+
   /// Returns a reference to a git package with the given [name] and [url].
   ///
   /// If passed, [reference] is the Git reference. It defaults to `"HEAD"`.
-  static PackageRef refFor(String name, String url, {String reference}) =>
-      new PackageRef(name, "git", {'url': url, 'ref': reference ?? 'HEAD'});
+  PackageRef refFor(String name, String url, {String reference}) =>
+      new PackageRef(name, this, {'url': url, 'ref': reference ?? 'HEAD'});
 
   /// Given a valid git package description, returns the URL of the repository
   /// it pulls from.
-  static String urlFromDescription(description) => description["url"];
+  String urlFromDescription(description) => description["url"];
 
-  final name = "git";
+  PackageRef parseRef(String name, description, {String containingPath}) {
+    // TODO(rnystrom): Handle git URLs that are relative file paths (#8570).
+    if (description is String) description = {'url': description};
+
+    if (description is! Map) {
+      throw new FormatException("The description must be a Git URL or a map "
+          "with a 'url' key.");
+    }
+
+    if (description["url"] is! String) {
+      throw new FormatException("The 'url' field of the description must be a "
+          "string.");
+    }
+
+    _validateUrl(description["url"]);
+
+    var ref = description["ref"];
+    if (ref != null && ref is! String) {
+      throw new FormatException("The 'ref' field of the description must be a "
+          "string.");
+    }
+
+    return new PackageRef(name, this, {
+      "url": description["url"],
+      "ref": description["ref"] ?? "HEAD"
+    });
+  }
+
+  PackageId parseId(String name, Version version, description) {
+    if (description is! Map) {
+      throw new FormatException("The description must be a map with a 'url' "
+          "key.");
+    }
+
+    if (description["url"] is! String) {
+      throw new FormatException("The 'url' field of the description must be a "
+          "string.");
+    }
+
+    _validateUrl(description["url"]);
+
+    var ref = description["ref"];
+    if (ref != null && ref is! String) {
+      throw new FormatException("The 'ref' field of the description must be a "
+          "string.");
+    }
+
+    if (description["resolved-ref"] is! String) {
+      throw new FormatException("The 'resolved-ref' field of the description "
+          "must be a string.");
+    }
+
+    return new PackageId(name, this, version, {
+      "url": description["url"],
+      "ref": description["ref"] ?? "HEAD",
+      "resolved-ref": description["resolved-ref"]
+    });
+  }
+
+  /// Throws a [FormatException] if [url] isn't a valid Git URL.
+  void _validateUrl(String url) {
+    // If the URL contains an @, it's probably an SSH hostname, which we don't
+    // know how to validate.
+    if (url.contains("@")) return;
+
+    // Otherwise, we use Dart's URL parser to validate the URL.
+    Uri.parse(url);
+  }
+
+  /// If [description] has a resolved ref, print it out in short-form.
+  ///
+  /// This helps distinguish different git commits with the same pubspec
+  /// version.
+  String formatDescription(String containingPath, description) {
+    if (description is Map && description.containsKey('resolved-ref')) {
+      return "${description['url']} at "
+          "${description['resolved-ref'].substring(0, 6)}";
+    } else {
+      return super.formatDescription(containingPath, description);
+    }
+  }
+
+  /// Two Git descriptions are equal if both their URLs and their refs are
+  /// equal.
+  bool descriptionsEqual(description1, description2) {
+    // TODO(nweiz): Do we really want to throw an error if you have two
+    // dependencies on some repo, one of which specifies a ref and one of which
+    // doesn't? If not, how do we handle that case in the version solver?
+    if (description1['url'] != description2['url']) return false;
+    if (description1['ref'] != description2['ref']) return false;
+
+    if (description1.containsKey('resolved-ref') &&
+        description2.containsKey('resolved-ref')) {
+      return description1['resolved-ref'] == description2['resolved-ref'];
+    }
+
+    return true;
+  }
+
+  int hashDescription(description) {
+    // Don't include the resolved ref in the hash code because we ignore it in
+    // [descriptionsEqual] if only one description defines it.
+    return description['url'].hashCode ^ description['ref'].hashCode;
+  }
+}
+
+/// The bound version of [GitSource].
+class LiveGitSource extends CachedSource {
+  final GitSource source;
+
+  final SystemCache systemCache;
+
+  LiveGitSource(this.source, this.systemCache);
 
   /// The paths to the canonical clones of repositories for which "git fetch"
   /// has already been run during this run of pub.
@@ -52,7 +171,7 @@ class GitSource extends CachedSource {
     var pubspec = await _describeUncached(ref, revision);
 
     return [
-      new PackageId(ref.name, name, pubspec.version, {
+      new PackageId(ref.name, source, pubspec.version, {
         'url': ref.description['url'],
         'ref': ref.description['ref'],
         'resolved-ref': revision
@@ -119,105 +238,6 @@ class GitSource extends CachedSource {
   String getDirectory(PackageId id) => path.join(
       systemCacheRoot, "${id.name}-${id.description['resolved-ref']}");
 
-  PackageRef parseRef(String name, description, {String containingPath}) {
-    // TODO(rnystrom): Handle git URLs that are relative file paths (#8570).
-    if (description is String) description = {'url': description};
-
-    if (description is! Map) {
-      throw new FormatException("The description must be a Git URL or a map "
-          "with a 'url' key.");
-    }
-
-    if (description["url"] is! String) {
-      throw new FormatException("The 'url' field of the description must be a "
-          "string.");
-    }
-
-    _validateUrl(description["url"]);
-
-    var ref = description["ref"];
-    if (ref != null && ref is! String) {
-      throw new FormatException("The 'ref' field of the description must be a "
-          "string.");
-    }
-
-    return new PackageRef(name, this.name, {
-      "url": description["url"],
-      "ref": description["ref"] ?? "HEAD"
-    });
-  }
-
-  PackageId parseId(String name, Version version, description) {
-    if (description is! Map) {
-      throw new FormatException("The description must be a map with a 'url' "
-          "key.");
-    }
-
-    if (description["url"] is! String) {
-      throw new FormatException("The 'url' field of the description must be a "
-          "string.");
-    }
-
-    _validateUrl(description["url"]);
-
-    var ref = description["ref"];
-    if (ref != null && ref is! String) {
-      throw new FormatException("The 'ref' field of the description must be a "
-          "string.");
-    }
-
-    if (description["resolved-ref"] is! String) {
-      throw new FormatException("The 'resolved-ref' field of the description "
-          "must be a string.");
-    }
-
-    return new PackageId(name, this.name, version, {
-      "url": description["url"],
-      "ref": description["ref"] ?? "HEAD",
-      "resolved-ref": description["resolved-ref"]
-    });
-  }
-
-  /// Throws a [FormatException] if [url] isn't a valid Git URL.
-  void _validateUrl(String url) {
-    // If the URL contains an @, it's probably an SSH hostname, which we don't
-    // know how to validate.
-    if (url.contains("@")) return;
-
-    // Otherwise, we use Dart's URL parser to validate the URL.
-    Uri.parse(url);
-  }
-
-  /// If [description] has a resolved ref, print it out in short-form.
-  ///
-  /// This helps distinguish different git commits with the same pubspec
-  /// version.
-  String formatDescription(String containingPath, description) {
-    if (description is Map && description.containsKey('resolved-ref')) {
-      return "${description['url']} at "
-          "${description['resolved-ref'].substring(0, 6)}";
-    } else {
-      return super.formatDescription(containingPath, description);
-    }
-  }
-
-  /// Two Git descriptions are equal if both their URLs and their refs are
-  /// equal.
-  bool descriptionsEqual(description1, description2) {
-    // TODO(nweiz): Do we really want to throw an error if you have two
-    // dependencies on some repo, one of which specifies a ref and one of which
-    // doesn't? If not, how do we handle that case in the version solver?
-    if (description1['url'] != description2['url']) return false;
-    if (description1['ref'] != description2['ref']) return false;
-
-    if (description1.containsKey('resolved-ref') &&
-        description2.containsKey('resolved-ref')) {
-      return description1['resolved-ref'] == description2['resolved-ref'];
-    }
-
-    return true;
-  }
-
   List<Package> getCachedPackages() {
     // TODO(keertip): Implement getCachedPackages().
     throw new UnimplementedError(
@@ -234,8 +254,8 @@ class GitSource extends CachedSource {
 
     var packages = listDir(systemCacheRoot)
         .where((entry) => dirExists(path.join(entry, ".git")))
-        .map((packageDir) => new Package.load(null, packageDir,
-            systemCache.sources))
+        .map((packageDir) => new Package.load(
+            null, packageDir, systemCache.sources))
         .toList();
 
     // Note that there may be multiple packages with the same name and version
@@ -243,7 +263,7 @@ class GitSource extends CachedSource {
     packages.sort(Package.orderByNameAndVersion);
 
     for (var package in packages) {
-      var id = new PackageId(package.name, this.name, package.version, null);
+      var id = new PackageId(package.name, source, package.version, null);
 
       log.message("Resetting Git repository for "
           "${log.bold(package.name)} ${package.version}...");

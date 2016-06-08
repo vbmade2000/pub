@@ -609,7 +609,7 @@ class AssetEnvironment {
     // application package, since that's not locked.
     var packageId = graph.lockFile.packages[package.name];
     if (packageId != null &&
-        graph.entrypoint.cache.sources[packageId.source] is CachedSource) {
+        graph.entrypoint.cache.live(packageId.source) is CachedSource) {
       return new Future.value();
     }
 

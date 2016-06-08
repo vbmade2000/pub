@@ -10,6 +10,7 @@ import '../entrypoint.dart';
 import '../log.dart' as log;
 import '../package.dart';
 import '../source/hosted.dart';
+import '../source/path.dart';
 import '../validator.dart';
 
 /// The range of all pub versions that don't support `^` version constraints.
@@ -38,7 +39,7 @@ class DependencyValidator extends Validator {
     var caretDeps = [];
 
     for (var dependency in entrypoint.root.pubspec.dependencies) {
-      if (dependency.source != "hosted") {
+      if (dependency.source is! HostedSource) {
         await _warnAboutSource(dependency);
       } else if (dependency.constraint.isAny) {
         _warnAboutNoConstraint(dependency);
@@ -66,8 +67,8 @@ class DependencyValidator extends Validator {
   Future _warnAboutSource(PackageDep dep) async {
     var versions;
     try {
-      var ids = await entrypoint.cache.sources['hosted']
-          .getVersions(HostedSource.refFor(dep.name));
+      var ids = await entrypoint.cache.hosted
+          .getVersions(entrypoint.cache.sources.hosted.refFor(dep.name));
       versions = ids.map((id) => id.version).toList();
     } catch (error) {
       versions = [];
@@ -85,10 +86,7 @@ class DependencyValidator extends Validator {
     }
 
     // Path sources are errors. Other sources are just warnings.
-    var messages = warnings;
-    if (dep.source == "path") {
-      messages = errors;
-    }
+    var messages = dep.source is PathSource ? errors : warnings;
 
     messages.add('Don\'t depend on "${dep.name}" from the ${dep.source} '
             'source. Use the hosted source instead. For example:\n'
