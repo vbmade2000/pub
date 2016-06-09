@@ -40,10 +40,14 @@ class ConstraintNormalizer {
   /// to [range].
   VersionRange _normalizeRange(VersionRange range) {
     if (_normalized[range] ?? false) return range;
-    if (range.max == null) {
+    if (range.isAny) {
       _normalized[range] = true;
       return range;
     }
+
+    var least = _leastVersionIn(range);
+    // TODO(nweiz): handle the case where the user passes in empty ranges.
+    assert(least != null);
 
     // TODO(nweiz): It may be more user-friendly to avoid normalizing individual
     // versions here, so the user sees messages about "foo 1.2.3" rather than
@@ -53,10 +57,27 @@ class ConstraintNormalizer {
     // This makes the range look more like a caret-style version range and
     // implicitly tracks the upper bound.
     var result = new VersionRange(
-        min: range.min, max: _strictLeastUpperBound(range),
-        includeMin: range.includeMin, includeMax: false);
+        min: least,
+        max: range.max == null ? null : _strictLeastUpperBound(range),
+        includeMin: true, includeMax: false);
     _normalized[result] = true;
     return result;
+  }
+
+  /// Returns the lowest version in [_versions] that's covered by [range].
+  ///
+  /// If no versions in [_versions] are covered, returns `null`.
+  Version _leastVersionIn(VersionRange range) {
+    var index = _leastUpperBoundIndex(range.min);
+    if (index == _versions.length) return null;
+
+    var bound = _versions[index];
+    if (bound == range.min && !range.includeMin) {
+      if (index + 1 == _versions.length) return null;
+      bound = _versions[index + 1];
+    }
+
+    return range.allows(bound) ? bound : null;
   }
 
   /// Returns the lowest version in [_versions] that's strictly greater than all
