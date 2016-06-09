@@ -439,6 +439,9 @@ class BacktrackingSolver {
         // The first time selecting a version fails, add all the dependers on
         // the package in question to [_deducer].
         if (!failed) {
+          // TODO: should this fact-ify transitive dependers as well? If not,
+          // how are they going to get resolved? See deducer debug info for "no
+          // version that matches combined constraint" test.
           for (var dependency in _selection.getDependenciesOn(name)) {
             _deducer.add(_dependencyToFact(dependency));
           }

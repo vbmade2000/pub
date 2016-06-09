@@ -511,6 +511,16 @@ class Deducer {
       }
     }
 
+    // TODO: multiple dependencies on the same allowed may be incompatible. For
+    // example, if:
+    //
+    // * a [0, 1) depends on b [0, 1)
+    // * c [0, 1) depends on b [1, 2)
+    //
+    // we can add
+    //
+    //* a [0, 1) is incompatible with c [0, 1)
+
     // A map containing all dependencies from [fact.allowed] onto other
     // packages, indexed by their `allowed` packages.
     var dependencyByAllowed = groupBy(
