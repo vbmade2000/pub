@@ -425,14 +425,24 @@ class BacktrackingSolver {
   /// If the first version is valid, no rewinding will be done. If no version is
   /// valid, this throws a [SolveFailure] explaining why.
   Future _findValidVersion(VersionQueue queue) async {
-    // TODO(nweiz): Use real while loops when issue 23394 is fixed.
-    return Future.doWhile(() async {
+    var failed = false;
+    while (true) {
       try {
         await _checkVersion(queue.current);
-        return false;
+        break;
       } on SolveFailure {
         var name = queue.current.name;
-        if (await queue.advance()) return true;
+
+        // The first time selecting a version fails, add all the dependers on
+        // the package in question to [_deducer].
+        if (!failed) {
+          for (var dependency in _selection.getDependenciesOn(name)) {
+            _deducer.add(_dependencyToFact(dependency));
+          }
+          failed = true;
+        }
+
+        if (await queue.advance()) continue;
 
         // If we've run out of valid versions for this package, mark its oldest
         // depender as failing. This ensures that we look at graphs in which the
@@ -447,7 +457,7 @@ class BacktrackingSolver {
         // encountered while trying to find one.
         rethrow;
       }
-    });
+    }
   }
 
   /// Checks whether the package identified by [id] is valid relative to the
@@ -460,7 +470,6 @@ class BacktrackingSolver {
       var deps = _selection.getDependenciesOn(id.name);
       for (var dep in deps) {
         if (dep.dep.constraint.allows(id.version)) continue;
-        _deducer.add(_dependencyToFact(dep));
         _fail(dep.depender.name);
       }
 
