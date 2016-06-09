@@ -54,6 +54,15 @@ class Deducer {
   }
 
   void add(Fact initial) {
+    // TODO: I think we need to eagerly normalize all deps here. Just maximizing
+    // on merge means that if we're told:
+    //
+    // * a [0, 1) depends on b [2, 3)
+    // * b 1, 3, 5 exist
+    // * b [3] depends on c [0, 1)
+    //
+    // we can't reliably tell that b [2, 3) is a subset of b [3], and thus can't
+    // deduce that a [0, 1) depends on c [0, 1).
     _toProcess.add(initial);
 
     while (!_toProcess.isEmpty) {
