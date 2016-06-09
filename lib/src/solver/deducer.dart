@@ -8,7 +8,8 @@ import 'package:collection/collection.dart';
 import 'package:pub_semver/pub_semver.dart';
 
 import '../package.dart';
-import 'constraint_maximizer.dart';
+import '../source/unknown.dart';
+import 'constraint_normalizer.dart';
 import 'fact.dart';
 
 // At times we are able to transform one type of fact into another. We do this
@@ -26,7 +27,7 @@ import 'fact.dart';
 //
 // [mathematical interval notation]: https://en.wikipedia.org/wiki/Interval_(mathematics)#Notations_for_intervals
 class Deducer {
-  final _maximizers = <PackageRef, ConstraintMaximizer>{};
+  final _normalizers = <PackageRef, ConstraintNormalizer>{};
 
   final _required = <String, Required>{};
 
@@ -50,20 +51,11 @@ class Deducer {
   void setAllIds(Iterable<PackageId> ids) {
     var ref = ids.first.toRef();
     assert(ids.every((id) => id.toRef() == ref));
-    _maximizers[ref] = new ConstraintMaximizer(ids.map((id) => id.version));
+    _normalizers[ref] = new ConstraintNormalizer(ids.map((id) => id.version));
   }
 
   void add(Fact initial) {
-    // TODO: I think we need to eagerly normalize all deps here. Just maximizing
-    // on merge means that if we're told:
-    //
-    // * a [0, 1) depends on b [2, 3)
-    // * b 1, 3, 5 exist
-    // * b [3] depends on c [0, 1)
-    //
-    // we can't reliably tell that b [2, 3) is a subset of b [3], and thus can't
-    // deduce that a [0, 1) depends on c [0, 1).
-    _toProcess.add(initial);
+    _toProcess.add(_normalize(initial));
 
     while (!_toProcess.isEmpty) {
       _fromCurrent.clear();
@@ -119,7 +111,8 @@ class Deducer {
 
     var intersection = _intersectDeps(existing.dep, fact.dep);
     if (intersection == null) {
-      throw "Incompatible constraints!";
+      print("Incompatible constraints!");
+      return false;
     } else if (intersection == existing.dep) {
       // If [existing] is a subset of [fact], then [fact] is redundant. For
       // example, if
@@ -835,7 +828,10 @@ class Deducer {
 
     var difference = required.dep.constraint.difference(
         disallowed.dep.constraint);
-    if (difference.isEmpty) throw "Incompatible constriants!";
+    if (difference.isEmpty) {
+      print("Incompatible constraints!");
+      return null;
+    }
     if (difference == required.dep.constraint) return null;
 
     return new Required(
@@ -1274,14 +1270,8 @@ class Deducer {
       if (!dep.samePackage(ref)) return null;
     }
 
-    var maximizer = _maximizers[ref];
-    var constraints = list.map((dep) => dep.constraint);
-    if (maximizer == null) {
-      // There aren't maximizers for deps with invalid sources.
-      return ref.withConstraint(new VersionConstraint.unionOf(constraints));
-    } else {
-      return ref.withConstraint(maximizer.maximize(constraints));
-    }
+    return ref.withConstraint(
+        new VersionConstraint.unionOf(list.map((dep) => dep.constraint)));
   }
 
   // Intersect [deps], return `null` if they aren't compatible (diff name, diff
@@ -1300,5 +1290,36 @@ class Deducer {
     if (!minuend.samePackage(subtrahend)) return minuend;
     var difference = minuend.constraint.difference(subtrahend.constraint);
     return difference.isEmpty ? null : minuend.withConstraint(difference);
+  }
+
+  Fact _normalize(Fact fact) {
+    if (fact is Required) {
+      return new Required(_normalizeDep(fact.dep), fact.causes);
+    } else if (fact is Disallowed) {
+      return new Disallowed(_normalizeDep(fact.dep), fact.causes);
+    } else if (fact is Dependency) {
+      return new Dependency(
+          _normalizeDep(fact.depender),
+          _normalizeDep(fact.allowed),
+          fact.causes);
+    } else if (fact is Incompatibility) {
+      return new Incompatibility(
+          _normalizeDep(fact.dep1),
+          _normalizeDep(fact.dep2),
+          fact.causes);
+    }
+  }
+
+  PackageDep _normalizeDep(PackageDep dep) {
+    var normalizer = _normalizers[dep.toRef()];
+
+    // Don't normalize unknown sources or deps on invalid packages, since they
+    // don't have concrete versions available.
+    //
+    // TODO: nweiz:what happens if a package depends back on the root with a
+    // weird source?
+    if (normalizer == null) return dep;
+
+    return dep.withConstraint(normalizer.normalize(dep.constraint));
   }
 }

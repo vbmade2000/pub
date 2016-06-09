@@ -345,6 +345,9 @@ class BacktrackingSolver {
       allowed = await cache.getVersions(ref);
       _deducer.setAllIds(allowed);
     } on PackageNotFoundException catch (error) {
+      _deducer.add(new fact.Disallowed(
+          ref.withConstraint(VersionConstraint.any),
+          [fact.Cause.packageNotFound]));
       // Show the user why the package was being requested.
       throw new DependencyNotFoundException(
           ref.name, error, _selection.getDependenciesOn(ref.name).toList());

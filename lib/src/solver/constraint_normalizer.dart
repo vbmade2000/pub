@@ -5,34 +5,7 @@
 import 'package:collection/collection.dart';
 import 'package:pub_semver/pub_semver.dart';
 
-/// Merges constraints such that they fully cover actual available versions.
-///
-/// Thoroughly explaining what this means will require a bit of jargon, so bear
-/// with me. I promise not to use any technical terms without defining them
-/// first.
-///
-/// Suppose we're given a set of known [Version]s, which we'll call a **base**.
-/// We define two [VersionConstraint]s to be **equivalent** relative to a base
-/// if they cover exactly the same versions in the base. For example, if the
-/// base is `[1.0.0, 2.0.0, 3.0.0]`, then the ranges `^1.0.0` and `>=1.0.0
-/// <1.5.0` are equivalent.
-///
-/// We'll also define a version constraint to be **maximal** relative to a base
-/// if there are no equivalent constraints with fewer ranges. [Version]s and
-/// [VersionRange]s have only one range (themselves); a [VersionUnion] has
-/// `ranges.length` ranges. So for example, `^1.0.0` is maximal relative to the
-/// base above, but `">=1.0.0 <1.5.0" or ">=1.6.0 <2.0.0"` is not because it
-/// contains more ranges than necessary.
-///
-/// This class finds maximal equivalents for sets of [VersionConstraint]s. This
-/// is important for version solving because it means that we can safely take
-/// the difference of two version constraints without having useless gaps left
-/// over. It also makes the output more human-friendly, since we can talk about
-/// adjacent versions as ranges instead of individual versions.
-///
-/// Each [ConstraintMaximizer] maximizes constraints for one particular package
-/// and its set of versions.
-class ConstraintMaximizer {
+class ConstraintNormalizer {
   /// The set of concrete versions of the package that actually exist.
   ///
   /// This is the base relative to which maximality is defined.
@@ -51,26 +24,13 @@ class ConstraintMaximizer {
   /// [_normalize].
   final _normalized = new Expando<bool>();
 
-  ConstraintMaximizer(Iterable<Version> base)
+  ConstraintNormalizer(Iterable<Version> base)
       : _versions = base.toList();
 
-  /// Returns a maximal [VersionConstraint] equivalent to the union of
-  /// [constraints].
-  VersionConstraint maximize(Iterable<VersionConstraint> constraints) {
-    // TODO(nweiz): if there end up being a lot of constraints per union, we can
-    // avoid re-sorting them using [this algorithm][].
-    //
-    // [this algorithm]: https://gist.github.com/nex3/f4d0e2a9267d1b8cfdb5132b760d0111#gistcomment-1782883
-    var flattened = <VersionRange>[];
-    for (var constraint in constraints) {
-      if (constraint is VersionUnion) {
-        flattened.addAll(constraint.ranges.map(_normalize));
-      } else {
-        flattened.add(_normalize(constraint as VersionRange));
-      }
-    }
-
-    return new VersionConstraint.unionOf(flattened);
+  VersionConstraint normalize(VersionConstraint constraint) {
+    if (constraint is VersionRange) return _normalizeRange(constraint);
+    return new VersionConstraint.unionOf(
+        (constraint as VersionUnion).ranges.expand(_normalizeRange));
   }
 
   /// Normalize [range] so that it encodes the next upper bound.
@@ -78,7 +38,7 @@ class ConstraintMaximizer {
   /// If [range] has an upper bound, this adjusts it so that it's of the form
   /// `<V` where `V` is a version in the base. The returned range is equivalent
   /// to [range].
-  VersionRange _normalize(VersionRange range) {
+  VersionRange _normalizeRange(VersionRange range) {
     if (_normalized[range] ?? false) return range;
     if (range.max == null) {
       _normalized[range] = true;
@@ -87,8 +47,8 @@ class ConstraintMaximizer {
 
     // TODO(nweiz): It may be more user-friendly to avoid normalizing individual
     // versions here, so the user sees messages about "foo 1.2.3" rather than
-    // "foo >=1.2.3 <1.2.4". That would require more logic in [maximize] to
-    // merge those versions, though.
+    // "foo >=1.2.3 <1.2.4". That would require more logic when unioning
+    // normalized versions, though.
 
     // This makes the range look more like a caret-style version range and
     // implicitly tracks the upper bound.
