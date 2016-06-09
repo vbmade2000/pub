@@ -25,7 +25,7 @@ class ConstraintNormalizer {
   final _normalized = new Expando<bool>();
 
   ConstraintNormalizer(Iterable<Version> base)
-      : _versions = base.toList();
+      : _versions = base.toList()..sort();
 
   VersionConstraint normalize(VersionConstraint constraint) {
     if (constraint is VersionRange) return _normalizeRange(constraint);
