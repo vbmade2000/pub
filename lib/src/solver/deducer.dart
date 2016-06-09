@@ -12,6 +12,8 @@ import '../source/unknown.dart';
 import 'constraint_normalizer.dart';
 import 'fact.dart';
 
+var debug = true;
+
 // At times we are able to transform one type of fact into another. We do this
 // in a consistent direction to avoid circularity. The order of preferred types
 // is generally in order of strength of claim:
@@ -55,12 +57,14 @@ class Deducer {
   }
 
   void add(Fact initial) {
+    if (debug) print(">> $initial");
     _toProcess.add(_normalize(initial));
 
     while (!_toProcess.isEmpty) {
       _fromCurrent.clear();
 
       var fact = _toProcess.removeFirst();
+      if (debug) print("  $fact");
       if (fact is Required) {
         if (!_requiredIntoRequired(fact)) continue;
         if (!_requiredIntoDisallowed(fact)) continue;
@@ -101,6 +105,7 @@ class Deducer {
             .add(fact);
       }
 
+      if (debug) print("<< $fact");
       _toProcess.addAll(_fromCurrent);
     }
   }
