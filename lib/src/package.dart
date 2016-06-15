@@ -169,6 +169,18 @@ class Package {
     return p.relative(path, from: dir);
   }
 
+  /// Given a path within this package's `lib` directory, returns the package:
+  /// URI for referring to that path.
+  Uri packageUriFor(String path) {
+    if (dir == null) {
+      throw new StateError("Package $name is in-memory and doesn't have paths "
+          "on disk.");
+    }
+
+    var relative = p.relative(path, from: p.join(dir, 'lib'));
+    return Uri.parse("package:$name/${p.toUri(relative)}");
+  }
+
   /// Returns the path to the library identified by [id] within [this].
   String transformerPath(TransformerId id) {
     if (id.package != name) {

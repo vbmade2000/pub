@@ -16,6 +16,7 @@ import 'package:path/path.dart' as p;
 import 'asset/dart/serialize.dart';
 import 'io.dart';
 import 'log.dart' as log;
+import 'sdk.dart' as sdk;
 
 /// Interface to communicate with dart2js.
 ///
@@ -225,4 +226,22 @@ void _isolateBuffer(message) {
       'error': CrossIsolateException.serialize(e, stack)
     });
   });
+}
+
+/// Use DDC to compile a module to JS.
+///
+/// The [sources] are plain Dart files to compile, and [output] is the
+/// destination for the resulting JS. If [summaries] are passed, they're
+/// summaries for other modules produced by previous DDC runs.
+Future<PubProcessResult> compileModule(Iterable<String> sources, String output,
+    {Iterable<String> summaries}) {
+  var executable = p.join(sdk.rootDirectory, 'bin/dartdevc');
+  var args = ['--out', output];
+  for (var summary in summaries ?? []) {
+    args.add('--summary');
+    args.add(summary);
+  }
+  args.addAll(sources);
+
+  return runProcess(executable, args);
 }

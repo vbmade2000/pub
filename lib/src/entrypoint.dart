@@ -6,11 +6,13 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:barback/barback.dart';
+import 'package:collection/collection.dart';
 import 'package:package_config/packages_file.dart' as packages_file;
 import 'package:path/path.dart' as p;
 import 'package:pub_semver/pub_semver.dart';
 
 import 'barback/asset_environment.dart';
+import 'dart.dart' as dart;
 import 'exceptions.dart';
 import 'io.dart';
 import 'lock_file.dart';
@@ -117,6 +119,9 @@ class Entrypoint {
   /// debug mode.
   String get _precompiledDepsPath => root.path('.pub', 'deps', 'debug');
 
+  /// The path to the directory containing precompiled DDC modules.
+  String get _modulePath => root.path('.pub', 'module');
+
   /// The path to the directory containing dependency executable snapshots.
   String get _snapshotPath => root.path('.pub', 'bin');
 
@@ -203,12 +208,15 @@ class Entrypoint {
     try {
       if (precompile) {
         await _precompileDependencies(changed: result.changedPackages);
+        await _precompileJS(changed: result.changedPackages);
         await precompileExecutables(changed: result.changedPackages);
       } else {
         // If precompilation is disabled, delete any stale cached dependencies
         // or snapshots.
         _deletePrecompiledDependencies(
             _dependenciesToPrecompile(changed: result.changedPackages));
+        _deletePrecompiledJS(
+            _dependenciesToJSPrecompile(changed: result.changedPackages));
         _deleteExecutableSnapshots(changed: result.changedPackages);
       }
     } catch (error, stackTrace) {
@@ -313,6 +321,165 @@ class Entrypoint {
           packageGraph.isPackageMutable(package.name)) {
         deleteEntry(subdir);
       }
+    }
+  }
+
+  /// Precompile all immutable strongly connected components in the dependency
+  /// subgraph reachable from [toPrecompile] to DDC modules.
+  Future _precompileJS({Iterable<String> changed}) async {
+    if (changed != null) changed = changed.toSet()..remove(root.name);
+
+    var toPrecompile = _dependenciesToJSPrecompile(changed: changed);
+    _deletePrecompiledJS(toPrecompile);
+    if (toPrecompile.isEmpty) return;
+
+    await log.progress("Precompiling JS modules", () async {
+      // The subgraph of [packageGraph] defined by the transitive dependencies
+      // of [toPrecompile].
+      var graph = new Map.fromIterable(
+          toPrecompile
+              .expand((name) => packageGraph.transitiveDependencies(name))
+              .toSet(),
+          key: (package) => package.name,
+          value: (package) => package.dependencies.map((dep) => dep.name));
+
+      ensureDir(_modulePath);
+      log.fine("Strongly connected components:");
+      for (var component in stronglyConnectedComponents(graph).reversed) {
+        log.fine("* ${toSentence(component)}");
+
+        if (!overlaps(toPrecompile, component)) {
+          log.fine("  doesn't need to be recompiled");
+          continue;
+        }
+
+        // Transitive dependencies from packages in [component] to packages
+        // outside [component]. We need to include these packages' summaries
+        // when compiling this component.
+        var dependencies = component
+            .expand(packageGraph.transitiveDependencies)
+            .map((package) => package.name)
+            .toSet()
+            .difference(component);
+        if (dependencies.isNotEmpty) {
+          log.fine("  "
+              "${pluralize('depends', component.length, plural: 'depend')} "
+              "on ${toSentence(dependencies)}");
+        }
+
+        // Get the paths to the components for the dependencies of packages in
+        // this component. [stronglyConnectedComponents] returns
+        // topologically-sorted components so the dependency components
+        // *should* exist by the time we get here, but they may have failed to
+        // compile.
+        var dependencyComponents = dependencies.map((name) {
+          var path = _moduleContaining(name);
+          if (path == null) log.fine("    $name's module is not available");
+          return path;
+        }).toSet();
+        if (dependencyComponents.contains(null)) continue;
+        if (dependencyComponents.isNotEmpty) {
+          log.fine("    which "
+              "${pluralize('is', dependencies.length, plural: 'are')} in "
+              "${toSentence(dependencyComponents)}");
+        }
+
+        // Dart files in [component].
+        var files = component.expand((name) {
+          var package = packageGraph.packages[name];
+          return package
+              .listFiles(beneath: "lib")
+              .where((file) => p.extension(file) == ".dart")
+              .map((file) => package.packageUriFor(file).toString());
+        });
+
+        var hash = sha1(ordered(component).join(','));
+        var output = p.join(_modulePath, "module-$hash.js");
+        var result = await dart.compileModule(
+            files, output,
+            summaries: dependencyComponents.map((path) => "$path.sum"));
+        if (!result.success) continue;
+
+        log.fine("  compiled to $output");
+        for (var name in component) {
+          writeTextFile(p.join(_modulePath, name), hash);
+        }
+      }
+
+      log.message("Precompiled dependencies.");
+    });
+  }
+
+  /// Returns the set of dependencies that need to be precompiled to JS modules.
+  ///
+  /// If [changed] is passed, only dependencies whose contents might be changed
+  /// if one of the given packages changes will be returned.
+  Set<String> _dependenciesToJSPrecompile({Set<String> changed}) {
+    return packageGraph.packages.values.where((package) {
+      if (packageGraph.isPackageMutable(package.name)) return false;
+      if (!fileExists(p.join(_modulePath, package.name))) return true;
+      if (changed == null) return true;
+
+      /// Only recompile [package] if any of its transitive dependencies have
+      /// changed. We check all transitive dependencies because it's possible
+      /// that a transformer makes decisions based on their contents.
+      return overlaps(
+          packageGraph.transitiveDependencies(package.name)
+              .map((package) => package.name).toSet(),
+          changed);
+    }).map((package) => package.name).toSet();
+  }
+
+  /// Deletes outdated precompiled JS modules.
+  ///
+  /// This deletes the modules containing all packages in [packages], their
+  /// transitive dependers, and any packages that are now mutable.
+  void _deletePrecompiledJS([Iterable<String> packages]) {
+    if (!dirExists(_modulePath)) return;
+
+    packages = packages?.toSet() ?? new Set();
+    for (var entry in listDir(_modulePath)) {
+      // Ignore actual modules for now.
+      if (entry.contains("-")) continue;
+      if (!_shouldDeleteModule(entry, packages)) continue;
+
+      var module = _moduleContaining(p.basename(entry));
+      if (module != null) {
+        deleteEntry("$module.js");
+        deleteEntry("$module.sum");
+        deleteEntry("$module.map");
+      }
+      deleteEntry(entry);
+    }
+  }
+
+  /// Returns whether the module referred to be the package index file at [path]
+  /// should be deleted.
+  ///
+  /// The [packages] set contains the names of all packages that will be newly
+  /// precompiled.
+  bool _shouldDeleteModule(String path, Set<String> packages) {
+    var name = p.basename(path);
+    if (packages.contains(name)) return true;
+    if (!packageGraph.packages.containsKey(name)) return true;
+    if (packageGraph.isPackageMutable(name)) return true;
+
+    // TODO(nweiz): This is worst-case O(n^2) in the number of packages. We
+    // could do it in O(n) by iterating in reverse topological order and just
+    // checking whether dependency index files exist, but that would be a lot
+    // more complicated.
+    return packageGraph.transitiveDependencies(name)
+        .any((dependency) => packages.contains(dependency.name));
+  }
+
+  /// Returns the extension-less path to the module containing [package], or
+  /// `null` if no such module exists.
+  String _moduleContaining(String package) {
+    try {
+      var hash = readTextFile(p.join(_modulePath, package));
+      return p.join(_modulePath, "module-$hash");
+    } on IOException {
+      return null;
     }
   }
 
