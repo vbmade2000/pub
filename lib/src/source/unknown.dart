@@ -22,8 +22,8 @@ class UnknownSource extends Source {
 
   UnknownSource(this.name);
 
-  LiveSource bind(SystemCache systemCache) =>
-      new _LiveUnknownSource(this, systemCache);
+  BoundSource bind(SystemCache systemCache) =>
+      new _BoundUnknownSource(this, systemCache);
 
   /// Two unknown sources are the same if their names are the same.
   bool operator==(other) =>
@@ -42,12 +42,12 @@ class UnknownSource extends Source {
       new PackageId(name, this.name, version, description);
 }
 
-class _LiveUnknownSource extends LiveSource {
+class _BoundUnknownSource extends BoundSource {
   final UnknownSource source;
 
   final SystemCache systemCache;
 
-  _LiveUnknownSource(this.source, this.systemCache);
+  _BoundUnknownSource(this.source, this.systemCache);
 
   Future<List<PackageId>> doGetVersions(PackageRef ref) =>
       throw new UnsupportedError(

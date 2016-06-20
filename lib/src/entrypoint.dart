@@ -432,7 +432,7 @@ class Entrypoint {
   Future _get(PackageId id) async {
     if (id.isRoot) return;
 
-    var source = cache.liveSource(id.source);
+    var source = cache.source(id.source);
     if (!_packageSymlinks) {
       if (source is CachedSource) await source.downloadToSystemCache(id);
       return;
@@ -516,7 +516,7 @@ class Entrypoint {
     // Check that uncached dependencies' pubspecs are also still satisfied,
     // since they're mutable and may have changed since the last get.
     for (var id in lockFile.packages.values) {
-      var source = cache.liveSource(id.source);
+      var source = cache.source(id.source);
       if (source is CachedSource) continue;
 
       try {
@@ -561,11 +561,11 @@ class Entrypoint {
       // We only care about cached sources. Uncached sources aren't "installed".
       // If one of those is missing, we want to show the user the file not
       // found error later since installing won't accomplish anything.
-      var liveSource = cache.liveSource(package.source);
-      if (liveSource is! CachedSource) return true;
+      var boundSource = cache.source(package.source);
+      if (boundSource is! CachedSource) return true;
 
       // Get the directory.
-      var dir = liveSource.getDirectory(package);
+      var dir = boundSource.getDirectory(package);
       // See if the directory is there and looks like a package.
       return dirExists(dir) && fileExists(p.join(dir, "pubspec.yaml"));
     });
@@ -582,7 +582,7 @@ class Entrypoint {
         p.toUri(packagesFile));
 
     return lockFile.packages.values.every((lockFileId) {
-      var source = cache.liveSource(lockFileId.source);
+      var source = cache.source(lockFileId.source);
 
       // It's very unlikely that the lockfile is invalid here, but it's not
       // impossible—for example, the user may have a very old application

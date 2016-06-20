@@ -23,14 +23,14 @@ import 'utils.dart';
 ///
 /// Each user-visible source has two classes: a [Source] that knows how to do
 /// filesystem-independent operations like parsing and comparing descriptions,
-/// and a [LiveSource] that knows how to actually install (and potentially
-/// download) those packages. Only the [LiveSource] has access to the
+/// and a [BoundSource] that knows how to actually install (and potentially
+/// download) those packages. Only the [BoundSource] has access to the
 /// [SystemCache].
 ///
 /// ## Subclassing
 ///
-/// All [Source]s should extend this class and all [LiveSource]s should extend
-/// [LiveSource]. In addition to defining the behavior of various methods,
+/// All [Source]s should extend this class and all [BoundSource]s should extend
+/// [BoundSource]. In addition to defining the behavior of various methods,
 /// sources define the structure of package descriptions used in [PackageRef]s,
 /// [PackageDep]s, and [PackageId]s. There are three distinct types of
 /// description, although in practice most sources use the same format for one
@@ -66,7 +66,7 @@ abstract class Source {
   ///
   /// This should only be called once for each source, by
   /// [SystemCache.register]. It should not be overridden by base classes.
-  LiveSource bind(SystemCache systemCache);
+  BoundSource bind(SystemCache systemCache);
 
   /// Parses a [PackageRef] from a name and a user-provided [description].
   ///
@@ -129,7 +129,7 @@ abstract class Source {
 }
 
 /// A source bound to a [SystemCache].
-abstract class LiveSource {
+abstract class BoundSource {
   /// The unbound source that produced [this]. 
   Source get source;
 

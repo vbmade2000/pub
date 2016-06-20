@@ -196,7 +196,7 @@ class SolverCache {
 
     _versionCacheMisses++;
 
-    var source = _cache.liveSource(package.source);
+    var source = _cache.source(package.source);
     var ids;
     try {
       ids = await source.getVersions(package);

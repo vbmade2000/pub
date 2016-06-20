@@ -14,7 +14,7 @@ import 'package:yaml/yaml.dart';
 class MockSource extends Source {
   final String name = 'mock';
 
-  LiveSource bind(SystemCache cache) =>
+  BoundSource bind(SystemCache cache) =>
       throw new UnsupportedError("Cannot download mock packages.");
 
   PackageRef parseRef(String name, description, {String containingPath}) {
