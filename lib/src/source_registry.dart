@@ -26,7 +26,7 @@ class SourceRegistry {
   Source _default;
 
   /// The registered sources, in name order.
-  List<Source> get sources {
+  List<Source> get all {
     var sources = _sources.values.toList();
     sources.sort((a, b) => a.name.compareTo(b.name));
     return sources;

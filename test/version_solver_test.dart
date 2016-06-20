@@ -1131,7 +1131,7 @@ testResolve(String description, Map packages, {
         // remote server.
         root = package;
       } else {
-        (cache.source(id.source) as LiveMockSource)
+        (cache.source(id.source) as BoundMockSource)
             .addPackage(id.description, package);
       }
     });
@@ -1356,7 +1356,7 @@ class MockSource extends Source {
 
   MockSource(this.name);
 
-  LiveSource bind(SystemCache cache) => new LiveMockSource(this, cache);
+  BoundSource bind(SystemCache cache) => new BoundMockSource(this, cache);
 
   PackageRef parseRef(String name, description, {String containingPath}) =>
       new PackageRef(name, this, description);
@@ -1370,7 +1370,7 @@ class MockSource extends Source {
   int hashDescription(description) => description.hashCode;
 }
 
-class LiveMockSource extends CachedSource {
+class BoundMockSource extends CachedSource {
   final SystemCache systemCache;
 
   final MockSource source;
@@ -1387,7 +1387,7 @@ class LiveMockSource extends CachedSource {
   /// caches the results.
   final _requestedPubspecs = new Map<String, Set<Version>>();
 
-  LiveMockSource(this.source, this.systemCache);
+  BoundMockSource(this.source, this.systemCache);
 
   String getDirectory(PackageId id) => '${id.name}-${id.version}';
 
