@@ -322,7 +322,8 @@ class LiveHostedSource extends CachedSource {
       // nice for the default and most recommended scheme. We also don't include
       // it for localhost URLs, since they're always known to be HTTP.
       var localhost = match[2] == null ? '' : 'localhost';
-      var scheme = match[1] == 'https://' || localhost.isNotEmpty ? '' : match[1];
+      var scheme =
+          match[1] == 'https://' || localhost.isNotEmpty ? '' : match[1];
       return "$scheme$localhost";
     });
     return replace(url, new RegExp(r'[<>:"\\/|?*%]'),

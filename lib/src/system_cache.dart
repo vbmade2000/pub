@@ -51,7 +51,7 @@ class SystemCache {
 
   /// The live sources bound to this cache, in name order.
   List<LiveSource> get liveSources {
-    return sources.sources.map((source) {
+    return sources.all.map((source) {
       return _liveSources.putIfAbsent(source.name, () => source.bind(this));
     }).toList();
   }
@@ -74,7 +74,7 @@ class SystemCache {
   /// Defaults to `false`.
   SystemCache({String rootDir, bool isOffline: false})
       : rootDir = rootDir == null ? SystemCache.defaultDir : rootDir {
-    for (var source in sources.sources) {
+    for (var source in sources.all) {
       if (source is HostedSource) {
         _liveSources[source.name] = source.bind(this, isOffline: isOffline);
       } else {
