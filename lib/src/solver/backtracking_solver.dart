@@ -596,7 +596,7 @@ class BacktrackingSolver {
   Future<Pubspec> _getPubspec(PackageId id) async {
     if (id.isRoot) return root.pubspec;
     if (id.isMagic && id.name == 'pub itself') return _implicitPubspec;
-    return await systemCache.live(id.source).describe(id);
+    return await systemCache.source(id.source).describe(id);
   }
 
   /// Logs the initial parameters to the solver.

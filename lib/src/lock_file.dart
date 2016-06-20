@@ -176,7 +176,7 @@ class LockFile {
 
     var map = new Map.fromIterable(ordered(packages.keys), value: (name) {
       var id = packages[name];
-      var source = cache.live(id.source);
+      var source = cache.source(id.source);
       return p.toUri(p.join(source.getDirectory(id), "lib"));
     });
 

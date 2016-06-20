@@ -210,7 +210,7 @@ class GlobalPackages {
   Future _cacheDependency(PackageId id) async {
     if (id.isRoot) return;
 
-    var source = cache.live(id.source);
+    var source = cache.source(id.source);
     if (source is! CachedSource) return;
 
     await source.downloadToSystemCache(id);
@@ -306,7 +306,7 @@ class GlobalPackages {
     var id = lockFile.packages[name];
     lockFile = lockFile.removePackage(name);
 
-    var source = cache.live(id.source);
+    var source = cache.source(id.source);
     var entrypoint;
     if (source is CachedSource) {
       // For cached sources, the package itself is in the cache and the

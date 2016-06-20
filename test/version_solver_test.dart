@@ -1131,7 +1131,7 @@ testResolve(String description, Map packages, {
         // remote server.
         root = package;
       } else {
-        (cache.live(id.source) as LiveMockSource)
+        (cache.source(id.source) as LiveMockSource)
             .addPackage(id.description, package);
       }
     });

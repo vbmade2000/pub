@@ -432,7 +432,7 @@ class Entrypoint {
   Future _get(PackageId id) async {
     if (id.isRoot) return;
 
-    var source = cache.live(id.source);
+    var source = cache.source(id.source);
     if (!_packageSymlinks) {
       if (source is CachedSource) await source.downloadToSystemCache(id);
       return;
@@ -516,7 +516,7 @@ class Entrypoint {
     // Check that uncached dependencies' pubspecs are also still satisfied,
     // since they're mutable and may have changed since the last get.
     for (var id in lockFile.packages.values) {
-      var source = cache.live(id.source);
+      var source = cache.source(id.source);
       if (source is CachedSource) continue;
 
       try {
@@ -551,7 +551,7 @@ class Entrypoint {
       // We only care about cached sources. Uncached sources aren't "installed".
       // If one of those is missing, we want to show the user the file not
       // found error later since installing won't accomplish anything.
-      var source = cache.live(package.source);
+      var source = cache.source(package.source);
       if (source is! CachedSource) return true;
 
       // Get the directory.
@@ -587,7 +587,7 @@ class Entrypoint {
         return false;
       }
 
-      var source = cache.live(lockFileId.source);
+      var source = cache.source(lockFileId.source);
 
       // Get the dirname of the .packages path, since it's pointing to lib/.
       var packagesFilePath = p.dirname(
