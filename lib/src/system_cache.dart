@@ -42,31 +42,25 @@ class SystemCache {
 
   /// The registry for sources used by this system cache.
   ///
-  /// New sources registered here will be available through [liveSources] and
-  /// [liveSource].
+  /// New sources registered here will be available through the [source]
+  /// function.
   final sources = new SourceRegistry();
 
-  /// The live sources bound to this cache.
-  final _liveSources = <Source, LiveSource>{};
+  /// The sources bound to this cache.
+  final _boundSources = <Source, BoundSource>{};
 
-  /// The live sources bound to this cache, in name order.
-  List<LiveSource> get liveSources {
-    return sources.sources.map((source) {
-      return _liveSources.putIfAbsent(source, () => source.bind(this));
-    }).toList();
-  }
+  /// The built-in Git source bound to this cache.
+  BoundGitSource get git => _boundSources[sources.git] as BoundGitSource;
 
-  /// The built-in live Git source bound to this cache.
-  LiveGitSource get git => _liveSources[sources.git] as LiveGitSource;
+  /// The built-in hosted source bound to this cache.
+  BoundHostedSource get hosted =>
+      _boundSources[sources.hosted] as BoundHostedSource;
 
-  /// The built-in live hosted source bound to this cache.
-  LiveHostedSource get hosted => _liveSources[sources.hosted] as LiveHostedSource;
-
-  /// The built-in live path source bound to this cache.
-  LivePathSource get path => _liveSources[sources.path] as LivePathSource;
+  /// The built-in path source bound to this cache.
+  BoundPathSource get path => _boundSources[sources.path] as BoundPathSource;
 
   /// The default source bound to this cache.
-  LiveSource get defaultSource => live(sources[null]);
+  BoundSource get defaultSource => source(sources[null]);
 
   /// Creates a system cache and registers all sources in [sources].
   ///
@@ -74,18 +68,18 @@ class SystemCache {
   /// Defaults to `false`.
   SystemCache({String rootDir, bool isOffline: false})
       : rootDir = rootDir == null ? SystemCache.defaultDir : rootDir {
-    for (var source in sources.sources) {
+    for (var source in sources.all) {
       if (source is HostedSource) {
-        _liveSources[source] = source.bind(this, isOffline: isOffline);
+        _boundSources[source] = source.bind(this, isOffline: isOffline);
       } else {
-        _liveSources[source] = source.bind(this);
+        _boundSources[source] = source.bind(this);
       }
     }
   }
 
-  /// Returns the live version of [soruce] bound to this cache.
-  LiveSource live(Source source) =>
-      _liveSources.putIfAbsent(source, () => source.bind(this));
+  /// Returns the version of [source] bound to this cache.
+  BoundSource source(Source source) =>
+      _boundSources.putIfAbsent(source, () => source.bind(this));
 
   /// Loads the package identified by [id].
   ///
@@ -95,12 +89,14 @@ class SystemCache {
       throw new ArgumentError("Unknown source ${id.source}.");
     }
 
-    return new Package.load(id.name, live(id.source).getDirectory(id), sources);
+    return new Package.load(
+        id.name, source(id.source).getDirectory(id), sources);
   }
 
   /// Determines if the system cache contains the package identified by [id].
   bool contains(PackageId id) {
-    var source = live(id.source);
+    var source = this.source(id.source);
+
     if (source is! CachedSource) {
       throw new ArgumentError("Package $id is not cacheable.");
     }

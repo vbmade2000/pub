@@ -21,8 +21,8 @@ import 'cached.dart';
 class GitSource extends Source {
   final name = "git";
 
-  LiveGitSource bind(SystemCache systemCache) =>
-      new LiveGitSource(this, systemCache);
+  BoundGitSource bind(SystemCache systemCache) =>
+      new BoundGitSource(this, systemCache);
 
   /// Returns a reference to a git package with the given [name] and [url].
   ///
@@ -140,13 +140,13 @@ class GitSource extends Source {
   }
 }
 
-/// The bound version of [GitSource].
-class LiveGitSource extends CachedSource {
+/// The [BoundSource] for [GitSource].
+class BoundGitSource extends CachedSource {
   final GitSource source;
 
   final SystemCache systemCache;
 
-  LiveGitSource(this.source, this.systemCache);
+  BoundGitSource(this.source, this.systemCache);
 
   /// The paths to the canonical clones of repositories for which "git fetch"
   /// has already been run during this run of pub.

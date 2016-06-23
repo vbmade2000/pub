@@ -128,15 +128,7 @@ class BacktrackingSolver {
       : type = type,
         systemCache = systemCache,
         cache = new SolverCache(type, systemCache),
-        _implicitPubspec = (() {
-          var dependencies = [];
-          barback.pubConstraints.forEach((name, constraint) {
-            dependencies.add(
-                systemCache.sources.hosted.refFor(name).withConstraint(constraint));
-          });
-
-          return new Pubspec("pub itself", dependencies: dependencies);
-        })() {
+        _implicitPubspec = _makeImplicitPubspec(systemCache) {
     _selection = new VersionSelection(this);
 
     for (var package in useLatest) {
@@ -148,6 +140,18 @@ class BacktrackingSolver {
     for (var override in root.dependencyOverrides) {
       _overrides[override.name] = override;
     }
+  }
+
+  /// Creates [_implicitPubspec].
+  static Pubspec _makeImplicitPubspec(SystemCache systemCache) {
+    var dependencies = [];
+    barback.pubConstraints.forEach((name, constraint) {
+      dependencies.add(
+          systemCache.sources.hosted.refFor(name)
+              .withConstraint(constraint));
+    });
+
+    return new Pubspec("pub itself", dependencies: dependencies);
   }
 
   /// Run the solver.
@@ -635,7 +639,7 @@ class BacktrackingSolver {
   Future<Pubspec> _getPubspec(PackageId id) async {
     if (id.isRoot) return root.pubspec;
     if (id.isMagic && id.name == 'pub itself') return _implicitPubspec;
-    return await systemCache.live(id.source).describe(id);
+    return await systemCache.source(id.source).describe(id);
   }
 
   /// Logs the initial parameters to the solver.

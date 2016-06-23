@@ -19,8 +19,8 @@ import '../utils.dart';
 class PathSource extends Source {
   final name = 'path';
 
-  LiveSource bind(SystemCache systemCache) =>
-      new LivePathSource(this, systemCache);
+  BoundSource bind(SystemCache systemCache) =>
+      new BoundPathSource(this, systemCache);
 
   /// Given a valid path reference description, returns the file path it
   /// describes.
@@ -131,13 +131,13 @@ class PathSource extends Source {
   }
 }
 
-/// The bound version of [PathSource].
-class LivePathSource extends LiveSource {
+/// The [BoundSource] for [PathSource].
+class BoundPathSource extends BoundSource {
   final PathSource source;
 
   final SystemCache systemCache;
 
-  LivePathSource(this.source, this.systemCache);
+  BoundPathSource(this.source, this.systemCache);
 
   Future<List<PackageId>> doGetVersions(PackageRef ref) async {
     // There's only one package ID for a given path. We just need to find the

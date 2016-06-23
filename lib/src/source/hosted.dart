@@ -27,10 +27,10 @@ class HostedSource extends Source {
   final name = "hosted";
   final hasMultipleVersions = true;
 
-  LiveHostedSource bind(SystemCache systemCache, {bool isOffline: false}) =>
+  BoundHostedSource bind(SystemCache systemCache, {bool isOffline: false}) =>
       isOffline
           ? new _OfflineHostedSource(this, systemCache)
-          : new LiveHostedSource(this, systemCache);
+          : new BoundHostedSource(this, systemCache);
 
   /// Gets the default URL for the package server for hosted dependencies.
   String get defaultUrl {
@@ -114,13 +114,13 @@ class HostedSource extends Source {
   }
 }
 
-/// The bound version of [HostedSource].
-class LiveHostedSource extends CachedSource {
+/// The [BoundSource] for [HostedSource].
+class BoundHostedSource extends CachedSource {
   final HostedSource source;
 
   final SystemCache systemCache;
 
-  LiveHostedSource(this.source, this.systemCache);
+  BoundHostedSource(this.source, this.systemCache);
 
   /// Downloads a list of all versions of a package that are available from the
   /// site.
@@ -324,7 +324,8 @@ class LiveHostedSource extends CachedSource {
       // nice for the default and most recommended scheme. We also don't include
       // it for localhost URLs, since they're always known to be HTTP.
       var localhost = match[2] == null ? '' : 'localhost';
-      var scheme = match[1] == 'https://' || localhost.isNotEmpty ? '' : match[1];
+      var scheme =
+          match[1] == 'https://' || localhost.isNotEmpty ? '' : match[1];
       return "$scheme$localhost";
     });
     return replace(url, new RegExp(r'[<>:"\\/|?*%]'),
@@ -378,7 +379,7 @@ class LiveHostedSource extends CachedSource {
 ///
 /// This uses the system cache to get the list of available packages and does
 /// no network access.
-class _OfflineHostedSource extends LiveHostedSource {
+class _OfflineHostedSource extends BoundHostedSource {
   _OfflineHostedSource(HostedSource source, SystemCache systemCache)
       : super(source, systemCache);
 
