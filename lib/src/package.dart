@@ -486,7 +486,7 @@ class PackageDep extends PackageName {
   ///
   /// Specifically, whether [id] refers to the same package as [this] *and*
   /// [constraint] allows `id.version`.
-  bool allowsID(PackageId id) =>
+  bool allows(PackageId id) =>
       samePackage(id) && constraint.allows(id.version);
 
   int get hashCode => super.hashCode ^ constraint.hashCode;

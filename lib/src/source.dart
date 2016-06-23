@@ -194,7 +194,8 @@ abstract class BoundSource {
   Future<Pubspec> describe(PackageId id) async {
     if (id.isRoot) throw new ArgumentError("Cannot describe the root package.");
     if (id.source != source) {
-      throw new ArgumentError("Package $id does not use source ${source.name}.");
+      throw new ArgumentError(
+          "Package $id does not use source ${source.name}.");
     }
 
     var pubspec = _pubspecs[id];

@@ -539,7 +539,7 @@ class Entrypoint {
     if (dep.name == root.name) return true;
 
     var locked = lockFile.packages[dep.name];
-    return locked != null && dep.allowsID(locked);
+    return locked != null && dep.allows(locked);
   }
 
   /// Determines whether all of the packages in the lockfile are already
