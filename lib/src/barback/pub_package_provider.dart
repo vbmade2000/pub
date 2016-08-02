@@ -24,7 +24,7 @@ import '../sdk.dart' as sdk;
 /// This is used to make sure dart2js is running against its own version of its
 /// internal libraries when running from the pub repo. It's `null` if we're
 /// running from the Dart repo or from the built SDK.
-final _compilerUnsupportedLib = (() async {
+final Future<String> _compilerUnsupportedLib = (() async {
   if (runningFromSdk) return null;
   if (runningFromDartRepo) return null;
 
