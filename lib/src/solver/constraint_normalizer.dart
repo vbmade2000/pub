@@ -30,7 +30,7 @@ class ConstraintNormalizer {
   VersionConstraint normalize(VersionConstraint constraint) {
     if (constraint is VersionRange) return _normalizeRange(constraint);
     return new VersionConstraint.unionOf(
-        (constraint as VersionUnion).ranges.expand(_normalizeRange));
+        (constraint as VersionUnion).ranges.map(_normalizeRange));
   }
 
   /// Normalize [range] so that it encodes the next upper bound.

@@ -343,7 +343,7 @@ class BacktrackingSolver {
   /// Gets all versions of [ref] that could be selected, other than [locked].
   Future<Iterable<PackageId>> _getAllowedVersions(PackageRef ref,
       PackageId locked) async {
-    var allowed;
+    Iterable<PackageId> allowed;
     try {
       allowed = await cache.getVersions(ref);
       _deducer.setAllIds(allowed);

@@ -8,7 +8,6 @@ import 'package:collection/collection.dart';
 import 'package:pub_semver/pub_semver.dart';
 
 import '../package.dart';
-import '../source/unknown.dart';
 import 'constraint_normalizer.dart';
 import 'fact.dart';
 
@@ -720,7 +719,7 @@ class Deducer {
       if (incompatible == null) continue;
 
       _fromCurrent.add(new Incompatibility(fact.depender, incompatible,
-          incompatibilities.toList()..add(fact)));
+          new List<Fact>.from(incompatibilities)..add(fact)));
     }
   }
 
@@ -1138,8 +1137,9 @@ class Deducer {
       // we can add
       //
       // * a [1, 2) is disallowed
-      return new Dependency(
-          intersection, dependency.allowed, reverse.toList()..add(dependency));
+      return new Disallowed(
+          _depMinus(dependency.depender, intersection),
+          reverse.toList()..add(dependency));
     }
   }
 
@@ -1322,6 +1322,8 @@ class Deducer {
           _normalizeDep(fact.dep1),
           _normalizeDep(fact.dep2),
           fact.causes);
+    } else {
+      throw "Unknown fact type $fact";
     }
   }
 
