@@ -39,6 +39,7 @@ import 'package:pub_semver/pub_semver.dart';
 
 import '../barback.dart' as barback;
 import '../exceptions.dart';
+import '../flutter.dart' as flutter;
 import '../lock_file.dart';
 import '../log.dart' as log;
 import '../package.dart';
@@ -144,7 +145,7 @@ class BacktrackingSolver {
 
   /// Creates [_implicitPubspec].
   static Pubspec _makeImplicitPubspec(SystemCache systemCache) {
-    var dependencies = [];
+    var dependencies = <PackageDep>[];
     barback.pubConstraints.forEach((name, constraint) {
       dependencies.add(
           systemCache.sources.hosted.refFor(name)
@@ -181,7 +182,7 @@ class BacktrackingSolver {
       logSolve();
       var packages = await _solve();
 
-      var pubspecs = {};
+      var pubspecs = <String, Pubspec>{};
       for (var id in packages) {
         pubspecs[id.name] = await _getPubspec(id);
       }
@@ -197,6 +198,7 @@ class BacktrackingSolver {
       // Gather some solving metrics.
       var buffer = new StringBuffer();
       buffer.writeln('${runtimeType} took ${stopwatch.elapsed} seconds.');
+      buffer.writeln('- Tried $_attemptedSolutions solutions');
       buffer.writeln(cache.describeResults());
       log.solver(buffer);
     }
@@ -210,17 +212,14 @@ class BacktrackingSolver {
   /// because we weren't trying to upgrade it, we will just know the current
   /// version.
   Map<String, List<Version>> _getAvailableVersions(List<PackageId> packages) {
-    var availableVersions = new Map<String, List<Version>>();
+    var availableVersions = <String, List<Version>>{};
     for (var package in packages) {
       var cached = cache.getCachedVersions(package.toRef());
-      var versions;
-      if (cached != null) {
-        versions = cached.map((id) => id.version).toList();
-      } else {
-        // If the version list was never requested, just use the one known
-        // version.
-        versions = [package.version];
-      }
+      // If the version list was never requested, just use the one known
+      // version.
+      var versions = cached == null
+          ? [package.version]
+          : cached.map((id) => id.version).toList();
 
       availableVersions[package.name] = versions;
     }
@@ -685,14 +684,34 @@ class BacktrackingSolver {
   /// Throws a [SolveFailure] if not.
   void _validateSdkConstraint(PackageId id, Pubspec pubspec) {
     if (_overrides.containsKey(pubspec.name)) return;
-    if (pubspec.environment.sdkVersion.allows(sdk.version)) return;
 
-    _deducer.add(new fact.Disallowed(
-        id.withConstraint(id.version), [fact.Cause.badSdkVersion]));
-    throw new BadSdkVersionException(pubspec.name,
-        'Package ${pubspec.name} requires SDK version '
-        '${pubspec.environment.sdkVersion} but the current SDK is '
-        '${sdk.version}.');
+    if (!pubspec.dartSdkConstraint.allows(sdk.version)) {
+      _deducer.add(new fact.Disallowed(
+          id.withConstraint(id.version), [fact.Cause.badSdkVersion]));
+      throw new BadSdkVersionException(pubspec.name,
+          'Package ${pubspec.name} requires SDK version '
+          '${pubspec.dartSdkConstraint} but the current SDK is '
+          '${sdk.version}.');
+    }
+
+    if (pubspec.flutterSdkConstraint != null) {
+      if (!flutter.isAvailable) {
+        _deducer.add(new fact.Disallowed(
+            id.withConstraint(id.version), [fact.Cause.badSdkVersion]));
+        throw new BadSdkVersionException(pubspec.name,
+            'Package ${pubspec.name} requires the Flutter SDK, which is not '
+            'available.');
+      }
+
+      if (!pubspec.flutterSdkConstraint.allows(flutter.version)) {
+        _deducer.add(new fact.Disallowed(
+            id.withConstraint(id.version), [fact.Cause.badSdkVersion]));
+        throw new BadSdkVersionException(pubspec.name,
+            'Package ${pubspec.name} requires Flutter SDK version '
+            '${pubspec.flutterSdkConstraint} but the current SDK is '
+            '${flutter.version}.');
+      }
+    }
   }
 
   fact.Dependency _dependencyToFact(Dependency dependency) =>

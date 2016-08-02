@@ -12,6 +12,7 @@ import 'package:pub_semver/pub_semver.dart';
 
 import 'barback/asset_environment.dart';
 import 'exceptions.dart';
+import 'flutter.dart' as flutter;
 import 'io.dart';
 import 'lock_file.dart';
 import 'log.dart' as log;
@@ -24,8 +25,26 @@ import 'source/unknown.dart';
 import 'system_cache.dart';
 import 'utils.dart';
 
-/// A RegExp to match the SDK constraint in a lock file.
-final _sdkConstraint = new RegExp(r'^sdk: "?([^"]*)"?$', multiLine: true);
+/// A RegExp to match the Dart SDK constraint in a lock file.
+///
+/// This matches both the old-style constraint:
+///
+/// ```yaml
+/// sdk: ">=1.2.3 <2.0.0"
+/// ```
+///
+/// and the new-style constraint:
+///
+/// ```yaml
+/// sdks:
+///   dart: ">=1.2.3 <2.0.0"
+/// ```
+final _dartSdkConstraint =
+    new RegExp(r'^(  dart|sdk): "?([^"]*)"?$', multiLine: true);
+
+/// A RegExp to match the Flutter SDK constraint in a lock file.
+final _flutterSdkConstraint =
+    new RegExp(r'^  flutter: "?([^"]*)"?$', multiLine: true);
 
 /// The context surrounding the root package pub is operating on.
 ///
@@ -88,7 +107,8 @@ class Entrypoint {
     if (_packageGraph != null) return _packageGraph;
 
     assertUpToDate();
-    var packages = new Map.fromIterable(lockFile.packages.values,
+    var packages = new Map<String, Package>.fromIterable(
+        lockFile.packages.values,
         key: (id) => id.name,
         value: (id) => cache.load(id));
     packages[root.name] = root;
@@ -275,7 +295,7 @@ class Entrypoint {
   ///
   /// If [changed] is passed, only dependencies whose contents might be changed
   /// if one of the given packages changes will be returned.
-  Set<String> _dependenciesToPrecompile({Iterable<String> changed}) {
+  Set<String> _dependenciesToPrecompile({Set<String> changed}) {
     return packageGraph.packages.values.where((package) {
       if (package.pubspec.transformers.isEmpty) return false;
       if (packageGraph.isPackageMutable(package.name)) return false;
@@ -489,12 +509,27 @@ class Entrypoint {
       touch(packagesFile);
     }
 
-    var sdkConstraint = _sdkConstraint.firstMatch(lockFileText);
-    if (sdkConstraint != null) {
-      var parsedConstraint = new VersionConstraint.parse(sdkConstraint[1]);
+    var dartSdkConstraint = _dartSdkConstraint.firstMatch(lockFileText);
+    if (dartSdkConstraint != null) {
+      var parsedConstraint = new VersionConstraint.parse(dartSdkConstraint[2]);
       if (!parsedConstraint.allows(sdk.version)) {
         dataError("Dart ${sdk.version} is incompatible with your dependencies' "
             "SDK constraints. Please run \"pub get\" again.");
+      }
+    }
+
+    // Don't complain if there's a Flutter constraint but Flutter is
+    // unavailable. Flutter being unavailable just means that we aren't running
+    // from within the `flutter` executable, and we want users to be able to
+    // `pub run` non-Flutter tools even in a Flutter app.
+    var flutterSdkConstraint = _flutterSdkConstraint.firstMatch(lockFileText);
+    if (flutterSdkConstraint != null && flutter.isAvailable) {
+      var parsedConstraint = new VersionConstraint.parse(
+          flutterSdkConstraint[1]);
+
+      if (!parsedConstraint.allows(flutter.version)) {
+        dataError("Flutter ${flutter.version} is incompatible with your "
+            "dependencies' SDK constraints. Please run \"pub get\" again.");
       }
     }
   }
@@ -661,13 +696,13 @@ class Entrypoint {
   /// Recursively lists the contents of [dir], excluding hidden `.DS_Store`
   /// files and `package` files.
   List<String> _listDirWithoutPackages(dir) {
-    return flatten(listDir(dir).map((file) {
+    return listDir(dir).expand/*<String>*/((file) {
       if (p.basename(file) == 'packages') return [];
       if (!dirExists(file)) return [];
       var fileAndSubfiles = [file];
       fileAndSubfiles.addAll(_listDirWithoutPackages(file));
       return fileAndSubfiles;
-    }));
+    });
   }
 
   /// If [packageSymlinks] is true, creates a symlink to the "packages"

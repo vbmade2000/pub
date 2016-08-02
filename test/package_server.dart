@@ -5,6 +5,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:async/async.dart';
 import 'package:path/path.dart' as p;
 import 'package:pub/src/io.dart';
 import 'package:pub/src/utils.dart';
@@ -73,6 +74,9 @@ class PackageServer {
 
   /// A future that will complete to the port used for the server.
   Future<int> get port => _inner.port;
+
+  /// A future that will complete to the URL for the server.
+  Future<String> get url async => 'http://localhost:${await port}';
 
   /// Creates an HTTP server that replicates the structure of pub.dartlang.org.
   ///
@@ -147,16 +151,13 @@ class PackageServerBuilder {
   ///
   /// If [contents] is passed, it's used as the contents of the package. By
   /// default, a package just contains a dummy lib directory.
-  void serve(String name, String version, {Map deps, Map pubspec,
-      Iterable<d.Descriptor> contents}) {
-    _futures.add(Future.wait([
-      awaitObject(deps),
-      awaitObject(pubspec)
-    ]).then((pair) {
-      var resolvedDeps = pair.first;
-      var resolvedPubspec = pair.last;
+  void serve(String name, String version, {Map<String, dynamic> deps,
+      Map<String, dynamic> pubspec, Iterable<d.Descriptor> contents}) {
+    _futures.add(new Future.sync(() async {
+      var resolvedDeps = await awaitObject(deps);
+      var resolvedPubspec = await awaitObject(pubspec);
 
-      var pubspecFields = {
+      var pubspecFields = <String, dynamic>{
         "name": name,
         "version": version
       };
@@ -202,11 +203,10 @@ class PackageServerBuilder {
 
   /// Returns a Future that completes once all the [serve] calls have been fully
   /// processed.
-  Future _await() {
-    if (_futures.futures.isEmpty) return new Future.value();
-    return _futures.future.then((_) {
-      _futures = new FutureGroup();
-    });
+  Future _await() async {
+    _futures.close();
+    await _futures.future;
+    _futures = new FutureGroup();
   }
 
   /// Clears all existing packages from this builder.

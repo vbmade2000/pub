@@ -79,11 +79,25 @@ class SolveResult {
   LockFile get lockFile {
     // Don't factor in overridden dependencies' SDK constraints, because we'll
     // accept those packages even if their constraints don't match.
-    var sdkConstraint = new VersionConstraint.intersection(pubspecs.values
+    var nonOverrides = pubspecs.values
         .where((pubspec) =>
             !_root.dependencyOverrides.any((dep) => dep.name == pubspec.name))
-        .map((pubspec) => pubspec.environment.sdkVersion));
-    return new LockFile(packages, sdkConstraint: sdkConstraint);
+        .toList();
+
+    var dartMerged = new VersionConstraint.intersection(nonOverrides
+        .map((pubspec) => pubspec.dartSdkConstraint));
+
+    var flutterConstraints = nonOverrides
+        .map((pubspec) => pubspec.flutterSdkConstraint)
+        .where((constraint) => constraint != null)
+        .toList();
+    var flutterMerged = flutterConstraints.isEmpty
+        ? null
+        : new VersionConstraint.intersection(flutterConstraints);
+
+    return new LockFile(packages,
+        dartSdkConstraint: dartMerged,
+        flutterSdkConstraint: flutterMerged);
   }
 
   final SourceRegistry _sources;
@@ -196,7 +210,7 @@ class SolverCache {
     _versionCacheMisses++;
 
     var source = _cache.source(package.source);
-    var ids;
+    List<PackageId> ids;
     try {
       ids = await source.getVersions(package);
     } catch (error, stackTrace) {
@@ -330,8 +344,8 @@ class BadSdkVersionException extends SolveFailure {
   final String _message;
 
   BadSdkVersionException(String package, String message)
-      : super(package, null),
-        _message = message;
+      : _message = message,
+        super(package, null);
 }
 
 /// Exception thrown when the [VersionConstraint] used to match a package is

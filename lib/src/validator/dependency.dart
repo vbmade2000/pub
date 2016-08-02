@@ -29,30 +29,31 @@ final _postCaretPubVersions = new VersionConstraint.parse("^1.8.0");
 class DependencyValidator extends Validator {
   /// Whether the SDK constraint guarantees that `^` version constraints are
   /// safe.
-  bool get _caretAllowed => entrypoint.root.pubspec.environment.sdkVersion
+  bool get _caretAllowed => entrypoint.root.pubspec.dartSdkConstraint
       .intersect(_preCaretPubVersions).isEmpty;
 
   DependencyValidator(Entrypoint entrypoint)
     : super(entrypoint);
 
   Future validate() async {
-    var caretDeps = [];
+    var caretDeps = <PackageDep>[];
 
     for (var dependency in entrypoint.root.pubspec.dependencies) {
+      var constraint = dependency.constraint;
       if (dependency.source is! HostedSource) {
         await _warnAboutSource(dependency);
-      } else if (dependency.constraint.isAny) {
+      } else if (constraint.isAny) {
         _warnAboutNoConstraint(dependency);
-      } else if (dependency.constraint is Version) {
+      } else if (constraint is Version) {
         _warnAboutSingleVersionConstraint(dependency);
-      } else if (dependency.constraint is VersionRange) {
-        if (dependency.constraint.min == null) {
+      } else if (constraint is VersionRange) {
+        if (constraint.min == null) {
           _warnAboutNoConstraintLowerBound(dependency);
-        } else if (dependency.constraint.max == null) {
+        } else if (constraint.max == null) {
           _warnAboutNoConstraintUpperBound(dependency);
         }
 
-        if (dependency.constraint.toString().startsWith("^")) {
+        if (constraint.toString().startsWith("^")) {
           caretDeps.add(dependency);
         }
       }
@@ -65,7 +66,7 @@ class DependencyValidator extends Validator {
 
   /// Warn that dependencies should use the hosted source.
   Future _warnAboutSource(PackageDep dep) async {
-    var versions;
+    List<Version> versions;
     try {
       var ids = await entrypoint.cache.hosted
           .getVersions(entrypoint.cache.sources.hosted.refFor(dep.name));
@@ -174,7 +175,7 @@ class DependencyValidator extends Validator {
   /// Emits an error for any version constraints that use `^` without an
   /// appropriate SDK constraint.
   void _errorAboutCaretConstraints(List<PackageDep> caretDeps) {
-    var newSdkConstraint = entrypoint.root.pubspec.environment.sdkVersion
+    var newSdkConstraint = entrypoint.root.pubspec.dartSdkConstraint
         .intersect(_postCaretPubVersions);
 
     if (newSdkConstraint.isEmpty) newSdkConstraint = _postCaretPubVersions;

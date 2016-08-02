@@ -211,9 +211,7 @@ class GlobalPackages {
     if (id.isRoot) return;
 
     var source = cache.source(id.source);
-    if (source is! CachedSource) return;
-
-    await source.downloadToSystemCache(id);
+    if (source is CachedSource) await source.downloadToSystemCache(id);
   }
 
   /// Finishes activating package [package] by saving [lockFile] in the cache.
@@ -321,12 +319,17 @@ class GlobalPackages {
           isGlobal: true);
     }
 
-    if (entrypoint.root.pubspec.environment.sdkVersion.allows(sdk.version)) {
-      return entrypoint;
+    if (entrypoint.root.pubspec.flutterSdkConstraint != null) {
+      dataError("${log.bold(name)} ${entrypoint.root.version} requires the "
+          "Flutter SDK, which is unsupported for global executables.");
     }
 
-    dataError("${log.bold(name)} ${entrypoint.root.version} doesn't support "
-        "Dart ${sdk.version}.");
+    if (!entrypoint.root.pubspec.dartSdkConstraint.allows(sdk.version)) {
+      dataError("${log.bold(name)} ${entrypoint.root.version} doesn't support "
+          "Dart ${sdk.version}.");
+    }
+
+    return entrypoint;
   }
 
   /// Runs [package]'s [executable] with [args].
@@ -427,7 +430,7 @@ class GlobalPackages {
   /// were successfully re-activated; the second indicates which failed.
   Future<Pair<List<String>, List<String>>> repairActivatedPackages()
       async {
-    var executables = {};
+    var executables = <String, List<String>>{};
     if (dirExists(_binStubDir)) {
       for (var entry in listDir(_binStubDir)) {
         try {
@@ -454,8 +457,8 @@ class GlobalPackages {
       }
     }
 
-    var successes = [];
-    var failures = [];
+    var successes = <String>[];
+    var failures = <String>[];
     if (dirExists(_directory)) {
       for (var entry in listDir(_directory)) {
         var id;
@@ -546,8 +549,8 @@ class GlobalPackages {
 
     ensureDir(_binStubDir);
 
-    var installed = [];
-    var collided = {};
+    var installed = <String>[];
+    var collided = <String, String>{};
     var allExecutables = ordered(package.pubspec.executables.keys);
     for (var executable in allExecutables) {
       if (executables != null && !executables.contains(executable)) continue;
@@ -770,7 +773,11 @@ pub global run ${package.name}:$script "\$@"
           'A web search for "configure windows path" will show you how.');
     } else {
       // See if the shell can find one of the binstubs.
-      var result = runProcessSync("which", [installed]);
+      //
+      // The "command" builtin is more reliable than the "which" executable. See
+      // http://unix.stackexchange.com/questions/85249/why-not-use-which-what-to-use-then
+      var result = runProcessSync("command", ["-v", installed],
+          runInShell: true);
       if (result.exitCode == 0) return;
 
       var binDir = _binStubDir;

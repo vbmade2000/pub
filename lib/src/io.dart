@@ -8,6 +8,7 @@ import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:async/async.dart';
 import 'package:path/path.dart' as path;
 import 'package:pool/pool.dart';
 import 'package:http/http.dart' show ByteStream;
@@ -194,11 +195,10 @@ Future<String> createFileFromStream(Stream<List<int>> stream, String file) {
   // TODO(nweiz): remove extra logging when we figure out the windows bot issue.
   log.io("Creating $file from stream.");
 
-  return _descriptorPool.withResource(() {
-    return stream.pipe(new File(file).openWrite()).then((_) {
-      log.fine("Created $file from stream.");
-      return file;
-    });
+  return _descriptorPool.withResource/*<Future<String>>*/(() async {
+    await stream.pipe(new File(file).openWrite());
+    log.fine("Created $file from stream.");
+    return file;
   });
 }
 
@@ -639,10 +639,11 @@ Future flushThenExit(int status) {
 /// Returns a [EventSink] that pipes all data to [consumer] and a [Future] that
 /// will succeed when [EventSink] is closed or fail with any errors that occur
 /// while writing.
-Pair<EventSink, Future> consumerToSink(StreamConsumer consumer) {
-  var controller = new StreamController(sync: true);
+Pair<EventSink/*<T>*/, Future> consumerToSink/*<T>*/(
+    StreamConsumer/*<T>*/ consumer) {
+  var controller = new StreamController/*<T>*/(sync: true);
   var done = controller.stream.pipe(consumer);
-  return new Pair<EventSink, Future>(controller.sink, done);
+  return new Pair(controller.sink, done);
 }
 
 // TODO(nweiz): remove this when issue 7786 is fixed.
@@ -681,15 +682,17 @@ Future store(Stream stream, EventSink sink,
 /// [environment] is provided, that will be used to augment (not replace) the
 /// the inherited variables.
 Future<PubProcessResult> runProcess(String executable, List<String> args,
-    {workingDir, Map<String, String> environment}) {
-  return _descriptorPool.withResource(() {
-    return _doProcess(Process.run, executable, args, workingDir, environment)
-        .then((result) {
-      var pubResult = new PubProcessResult(
-          result.stdout, result.stderr, result.exitCode);
-      log.processResult(executable, pubResult);
-      return pubResult;
-    });
+    {workingDir, Map<String, String> environment, bool runInShell: false}) {
+  return _descriptorPool.withResource(() async {
+    var result = await _doProcess(Process.run, executable, args,
+        workingDir: workingDir,
+        environment: environment,
+        runInShell: runInShell);
+
+    var pubResult = new PubProcessResult(
+        result.stdout, result.stderr, result.exitCode);
+    log.processResult(executable, pubResult);
+    return pubResult;
   });
 }
 
@@ -702,22 +705,28 @@ Future<PubProcessResult> runProcess(String executable, List<String> args,
 /// [environment] is provided, that will be used to augment (not replace) the
 /// the inherited variables.
 Future<PubProcess> startProcess(String executable, List<String> args,
-    {workingDir, Map<String, String> environment}) {
-  return _descriptorPool.request().then((resource) {
-    return _doProcess(Process.start, executable, args, workingDir, environment)
-        .then((ioProcess) {
-      var process = new PubProcess(ioProcess);
-      process.exitCode.whenComplete(resource.release);
-      return process;
-    });
+    {workingDir, Map<String, String> environment, bool runInShell: false}) {
+  return _descriptorPool.request().then((resource) async {
+    var ioProcess = await _doProcess(Process.start, executable, args,
+        workingDir: workingDir,
+        environment: environment,
+        runInShell: runInShell);
+
+    var process = new PubProcess(ioProcess);
+    process.exitCode.whenComplete(resource.release);
+    return process;
   });
 }
 
 /// Like [runProcess], but synchronous.
 PubProcessResult runProcessSync(String executable, List<String> args,
-        {String workingDir, Map<String, String> environment}) {
+    {String workingDir, Map<String, String> environment,
+    bool runInShell: false}) {
   var result = _doProcess(
-      Process.runSync, executable, args, workingDir, environment);
+      Process.runSync, executable, args,
+      workingDir: workingDir,
+      environment: environment,
+      runInShell: runInShell);
   var pubResult = new PubProcessResult(
       result.stdout, result.stderr, result.exitCode);
   log.processResult(executable, pubResult);
@@ -793,12 +802,10 @@ class PubProcess {
     _stdin = pair.first;
     _stdinClosed = errorGroup.registerFuture(pair.last);
 
-    _stdout = new ByteStream(
-        errorGroup.registerStream(process.stdout));
-    _stderr = new ByteStream(
-        errorGroup.registerStream(process.stderr));
+    _stdout = new ByteStream(errorGroup.registerStream(process.stdout));
+    _stderr = new ByteStream(errorGroup.registerStream(process.stderr));
 
-    var exitCodeCompleter = new Completer();
+    var exitCodeCompleter = new Completer<int>();
     _exitCode = errorGroup.registerFuture(exitCodeCompleter.future);
     _process.exitCode.then((code) => exitCodeCompleter.complete(code));
   }
@@ -813,14 +820,15 @@ class PubProcess {
 /// [fn] should have the same signature as [Process.start], except that the
 /// returned value may have any return type.
 _doProcess(Function fn, String executable, List<String> args,
-    String workingDir, Map<String, String> environment) {
+    {String workingDir, Map<String, String> environment,
+    bool runInShell: false}) {
   // TODO(rnystrom): Should dart:io just handle this?
   // Spawning a process on Windows will not look for the executable in the
   // system path. So, if executable looks like it needs that (i.e. it doesn't
   // have any path separators in it), then spawn it through a shell.
   if ((Platform.operatingSystem == "windows") &&
       (executable.indexOf('\\') == -1)) {
-    args = flatten(["/c", executable, args]);
+    args = ["/c", executable]..addAll(args);
     executable = "cmd";
   }
 
@@ -828,7 +836,8 @@ _doProcess(Function fn, String executable, List<String> args,
 
   return fn(executable, args,
       workingDirectory: workingDir,
-      environment: environment);
+      environment: environment,
+      runInShell: runInShell);
 }
 
 /// Updates [path]'s modification time.
@@ -848,12 +857,13 @@ void touch(String path) {
 ///
 /// Returns a future that completes to the value that the future returned from
 /// [fn] completes to.
-Future withTempDir(Future fn(String path)) {
-  return new Future.sync(() {
-    var tempDir = createSystemTempDir();
-    return new Future.sync(() => fn(tempDir))
-        .whenComplete(() => deleteEntry(tempDir));
-  });
+Future/*<T>*/ withTempDir/*<T>*/(Future/*<T>*/ fn(String path)) async {
+  var tempDir = createSystemTempDir();
+  try {
+    return await fn(tempDir);
+  } finally {
+    deleteEntry(tempDir);
+  }
 }
 
 /// Binds an [HttpServer] to [host] and [port].
@@ -985,8 +995,8 @@ Future _extractTarGzWindows(Stream<List<int>> stream, String destination) {
 /// working directory.
 ///
 /// Returns a [ByteStream] that emits the contents of the archive.
-ByteStream createTarGz(List contents, {baseDir}) {
-  return new ByteStream(futureStream(new Future.sync(() async {
+ByteStream createTarGz(List contents, {String baseDir}) {
+  return new ByteStream(StreamCompleter.fromFuture(new Future.sync(() async {
     var buffer = new StringBuffer();
     buffer.write('Creating .tag.gz stream containing:\n');
     contents.forEach((file) => buffer.write('$file\n'));

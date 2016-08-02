@@ -21,27 +21,37 @@ class LockFile {
   /// The packages this lockfile pins.
   final Map<String, PackageId> packages;
 
-  /// The intersection of all SDK constraints for all locked packages.
-  final VersionConstraint sdkConstraint;
+  /// The intersection of all Dart SDK constraints for all locked packages.
+  final VersionConstraint dartSdkConstraint;
+
+  /// The intersection of all Flutter SDK constraints for all locked packages,
+  /// or `null` if no packages require the Flutter SDK.
+  final VersionConstraint flutterSdkConstraint;
 
   /// Creates a new lockfile containing [ids].
   ///
-  /// If passed, [sdkConstraint] represents the intersection of all SKD
+  /// If passed, [dartSdkConstraint] represents the intersection of all Dart SDK
   /// constraints for all locked packages. It defaults to
-  /// [VersionConstraint.any].
-  LockFile(Iterable<PackageId> ids, {VersionConstraint sdkConstraint})
+  /// [VersionConstraint.any]. Similarly, [flutterSdkConstraint] represents the
+  /// intersection of all Flutter SDK constraints; however, it defaults to
+  /// `null`.
+  LockFile(Iterable<PackageId> ids, {VersionConstraint dartSdkConstraint,
+      VersionConstraint flutterSdkConstraint})
       : this._(
           new Map.fromIterable(
               ids.where((id) => !id.isRoot),
               key: (id) => id.name),
-          sdkConstraint ?? VersionConstraint.any);
+          dartSdkConstraint ?? VersionConstraint.any,
+          flutterSdkConstraint);
 
-  LockFile._(Map<String, PackageId> packages, this.sdkConstraint)
+  LockFile._(Map<String, PackageId> packages, this.dartSdkConstraint,
+      this.flutterSdkConstraint)
       : packages = new UnmodifiableMapView(packages);
 
   LockFile.empty()
       : packages = const {},
-        sdkConstraint = VersionConstraint.any;
+        dartSdkConstraint = VersionConstraint.any,
+        flutterSdkConstraint = null;
 
   /// Loads a lockfile from [filePath].
   factory LockFile.load(String filePath, SourceRegistry sources) {
@@ -66,26 +76,33 @@ class LockFile {
     var parsed = loadYamlNode(contents, sourceUrl: sourceUrl);
 
     _validate(parsed is Map, 'The lockfile must be a YAML mapping.', parsed);
+    var parsedMap = parsed as YamlMap;
 
-    var sdkConstraint = VersionConstraint.any;
-    var sdkConstraintText = parsed['sdk'];
-    if (sdkConstraintText != null) {
+    var dartSdkConstraint = VersionConstraint.any;
+    VersionConstraint flutterSdkConstraint;
+    var sdkNode = parsedMap.nodes['sdk'];
+    if (sdkNode != null) {
+      // Lockfiles produced by pub versions from 1.14.0 through 1.18.0 included
+      // a top-level "sdk" field which encoded the unified constraint on the
+      // Dart SDK. They had no way of specifying constraints on other SDKs.
+      dartSdkConstraint = _parseVersionConstraint(sdkNode);
+    } else if (parsedMap.containsKey('sdks')) {
+      var sdksField = parsedMap['sdks'];
       _validate(
-          sdkConstraintText is String,
-          'The "sdk" field must be a string.',
-          parsed.nodes['sdk']);
+          sdksField is Map,
+          'The "sdks" field must be a mapping.',
+          parsedMap.nodes['sdks']);
 
-      sdkConstraint = _wrapFormatException(
-          'version constraint',
-          parsed.nodes['sdk'].span,
-          () => new VersionConstraint.parse(sdkConstraintText));
+      dartSdkConstraint = _parseVersionConstraint(sdksField.nodes['dart']);
+      flutterSdkConstraint =
+          _parseVersionConstraint(sdksField.nodes['flutter']);
     }
 
-    var packages = {};
-    var packageEntries = parsed['packages'];
+    var packages = <String, PackageId>{};
+    var packageEntries = parsedMap['packages'];
     if (packageEntries != null) {
       _validate(packageEntries is Map, 'The "packages" field must be a map.',
-          parsed.nodes['packages']);
+          parsedMap.nodes['packages']);
 
       packageEntries.forEach((name, spec) {
         // Parse the version.
@@ -120,7 +137,22 @@ class LockFile {
       });
     }
 
-    return new LockFile._(packages, sdkConstraint);
+    return new LockFile._(packages, dartSdkConstraint, flutterSdkConstraint);
+  }
+
+  /// Asserts that [node] is a version constraint, and parses it.
+  static VersionConstraint _parseVersionConstraint(YamlNode node) {
+    if (node == null) return null;
+
+    _validate(
+        node.value is String,
+        'Invalid version constraint: must be a string.',
+        node);
+
+    return _wrapFormatException(
+        'version constraint',
+        node.span,
+        () => new VersionConstraint.parse(node.value));
   }
 
   /// Runs [fn] and wraps any [FormatException] it throws in a
@@ -151,9 +183,9 @@ class LockFile {
   LockFile setPackage(PackageId id) {
     if (id.isRoot) return this;
 
-    var packages = new Map.from(this.packages);
+    var packages = new Map<String, PackageId>.from(this.packages);
     packages[id.name] = id;
-    return new LockFile._(packages, sdkConstraint);
+    return new LockFile._(packages, dartSdkConstraint, flutterSdkConstraint);
   }
 
   /// Returns a copy of this LockFile with a package named [name] removed.
@@ -162,9 +194,9 @@ class LockFile {
   LockFile removePackage(String name) {
     if (!this.packages.containsKey(name)) return this;
 
-    var packages = new Map.from(this.packages);
+    var packages = new Map<String, PackageId>.from(this.packages);
     packages.remove(name);
-    return new LockFile._(packages, sdkConstraint);
+    return new LockFile._(packages, dartSdkConstraint, flutterSdkConstraint);
   }
 
   /// Returns the contents of the `.packages` file generated from this lockfile.
@@ -174,7 +206,8 @@ class LockFile {
   String packagesFile(SystemCache cache, [String entrypoint]) {
     var header = "Generated by pub on ${new DateTime.now()}.";
 
-    var map = new Map.fromIterable(ordered(packages.keys), value: (name) {
+    var map = new Map<String, Uri>.fromIterable(ordered(packages.keys),
+        value: (name) {
       var id = packages[name];
       var source = cache.source(id.source);
       return p.toUri(p.join(source.getDirectory(id), "lib"));
@@ -205,7 +238,14 @@ class LockFile {
       };
     });
 
-    var data = {'sdk': sdkConstraint.toString(), 'packages': packageMap};
+    var sdks = {
+      'dart': dartSdkConstraint.toString()
+    };
+    if (flutterSdkConstraint != null) {
+      sdks['flutter'] = flutterSdkConstraint.toString();
+    }
+
+    var data = {'sdks': sdks, 'packages': packageMap};
     return """
 # Generated by pub
 # See http://pub.dartlang.org/doc/glossary.html#lockfile
