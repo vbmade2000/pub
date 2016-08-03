@@ -9,6 +9,7 @@ import 'package:pub_semver/pub_semver.dart';
 
 import '../package.dart';
 import 'constraint_normalizer.dart';
+import 'deduction_failure.dart';
 import 'fact.dart';
 
 var debug = true;
@@ -115,8 +116,7 @@ class Deducer {
 
     var intersection = _intersectDeps(existing.dep, fact.dep);
     if (intersection == null) {
-      print("Incompatible constraints!");
-      return false;
+      throw new DeductionFailure([existing, fact]);
     } else if (intersection == existing.dep) {
       // If [existing] is a subset of [fact], then [fact] is redundant. For
       // example, if
@@ -842,10 +842,7 @@ class Deducer {
 
     var difference = required.dep.constraint.difference(
         disallowed.dep.constraint);
-    if (difference.isEmpty) {
-      print("Incompatible constraints!");
-      return null;
-    }
+    if (difference.isEmpty) throw new DeductionFailure([required, disallowed]);
     if (difference == required.dep.constraint) return null;
 
     return new Required(
