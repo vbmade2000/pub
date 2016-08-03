@@ -406,6 +406,12 @@ class BacktrackingSolver {
         } on SolveFailure {
           // `foundVersion` is already false.
         }
+      } else {
+        // If there are no more versions of this package, add dependencies on it
+        // to the deducer.
+        for (var dependency in _selection.getDependenciesOn(name)) {
+          _deducer.add(_dependencyToFact(dependency));
+        }
       }
 
       // If we found a valid version, add it to the selection and stop
@@ -442,9 +448,6 @@ class BacktrackingSolver {
         // The first time selecting a version fails, add all the dependers on
         // the package in question to [_deducer].
         if (!failed) {
-          // TODO: should this fact-ify transitive dependers as well? If not,
-          // how are they going to get resolved? See deducer debug info for "no
-          // version that matches combined constraint" test.
           for (var dependency in _selection.getDependenciesOn(name)) {
             _deducer.add(_dependencyToFact(dependency));
           }
