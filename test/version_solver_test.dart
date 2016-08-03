@@ -394,6 +394,44 @@ void unsolvable() {
         tries: 2);
   });
 
+  integration('triple incompatibility', () {
+    // a1, b1, and c1 are pairwise compatible but collectively incompatible;
+    // same with a2, b2, and c2. A naive deducer will fail to realize that both
+    // versions of base are unselectable, and thus won't deduce an error here.
+    servePackages((builder) {
+      builder.serve('a1', '1.0.0', deps: {'x1': '>=1.0.0 <3.0.0'});
+      builder.serve('b1', '1.0.0', deps: {'x1': '>=2.0.0 <4.0.0'});
+      builder.serve('c1', '1.0.0', deps: {'y1': '1.0.0'});
+      builder.serve('x1', '1.0.0');
+      builder.serve('x1', '2.0.0', deps: {'y1': '2.0.0'});
+      builder.serve('x1', '3.0.0');
+      builder.serve('y1', '1.0.0');
+      builder.serve('y1', '2.0.0');
+
+      builder.serve('a2', '1.0.0', deps: {'x2': '>=1.0.0 <3.0.0'});
+      builder.serve('b2', '1.0.0', deps: {'x2': '>=2.0.0 <4.0.0'});
+      builder.serve('c2', '1.0.0', deps: {'y2': '1.0.0'});
+      builder.serve('x2', '1.0.0');
+      builder.serve('x2', '2.0.0', deps: {'y2': '2.0.0'});
+      builder.serve('x2', '3.0.0');
+      builder.serve('y2', '1.0.0');
+      builder.serve('y2', '2.0.0');
+
+      builder.serve('base', '1.0.0',
+          deps: {'a1': 'any', 'b1': 'any', 'c1': 'any'});
+      builder.serve('base', '2.0.0',
+          deps: {'a2': 'any', 'b2': 'any', 'c2': 'any'});
+    });
+
+    d.appDir({'base': 'any'}).create();
+    expectResolves(
+        error: 'Package x2 has no versions that match >=2.0.0 <3.0.0 derived '
+                   'from:\n'
+               '- a2 1.0.0 depends on version >=1.0.0 <3.0.0\n'
+               '- b2 1.0.0 depends on version >=2.0.0 <4.0.0',
+        tries: 2);
+  });
+
   // This is a regression test for #15550.
   integration('no version that matches while backtracking', () {
     servePackages((builder) {
