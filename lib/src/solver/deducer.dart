@@ -140,11 +140,37 @@ class VersionSolver {
     return range1.compareTo(range2);
   }
 
+  void _selectVersion(PackageId id) {
+    // TODO: validate [id]'s SDK constraints
+
+    _decisions.add(id);
+    _decisionsByName[id.name] = id;
+    _constraints = new Map.from(_constraints);
+    _constraintsStack.add(_constraints);
+
+    var oldImplications = _implications;
+    _implications = {};
+    oldImplications.forEach((key, value) {
+      _implications[key] = value.toSet();
+    });
+    _implicationsStack.add(_implications);
+
+    _constraints.remove(id.name);
+
+    for (var clause in _clausesByName[id.name]) {
+      var unit = _unitToPropagate(clause);
+      assert(unit != _contradiction);
+      if (unit is Term && !_propagateUnit(unit)) return;
+    }
+
+    // TODO: add clauses based on ID's dependencies
+  }
+
   /// Adds a new clause to the deducer and propagates any new information it
   /// adds.
   ///
-  /// The new clause may cause the solver to backjump.
-  void _addClause(Clause clause) {
+  /// Returns `false` if adding the clause caused the solver to backjump.
+  bool _addClause(Clause clause) {
     _clauses.add(clause);
 
     for (var term in clause.terms) {
@@ -158,9 +184,10 @@ class VersionSolver {
       if (!_backjumpTo((id) => transitiveImplicators.contains(id.toRef()))) {
         throw "Contradiction!";
       }
-    } else if (unit is Term) {
-      _propagateUnit(unit);
+      return false;
     }
+    if (unit is Term) return _propagateUnit(unit);
+    return true;
   }
 
   // Returns `null`, a [Term], or `_contradiction`.
@@ -223,8 +250,8 @@ class VersionSolver {
     }
   }
 
-  // Returns the ID of the last 
-  void _propagateUnit(Term unit) {
+  // Returns whether propagation was successful without backjumping
+  bool _propagateUnit(Term unit) {
     var toPropagate = new Set.from([unit]);
     while (!toPropagate.isEmpty) {
       var term = toPropagate.remove(toPropagate.first);
@@ -258,9 +285,11 @@ class VersionSolver {
           throw "Contradiction!";
         }
         _addClause(new Clause(implicators));
-        return;
+        return false;
       }
     }
+
+    return true;
   }
 
   // Returns whether or not a global contradiction has been found.
