@@ -12,1328 +12,297 @@ import 'constraint_normalizer.dart';
 import 'deduction_failure.dart';
 import 'fact.dart';
 
-var debug = true;
+final _contradiction = new Object();
 
-// At times we are able to transform one type of fact into another. We do this
-// in a consistent direction to avoid circularity. The order of preferred types
-// is generally in order of strength of claim:
-//
-// 1. [Required]
-// 2. [Disallowed]
-// 3. [Dependency]
-// 4. [Incompatibility]
-//
-// Note that we use [mathematical interval notation][] to write about version
-// ranges. These have similar properties, but interval notation is much more
-// concise. An interval like [1, 3) should be read as >=1.0.0 <3.0.0.
-//
-// [mathematical interval notation]: https://en.wikipedia.org/wiki/Interval_(mathematics)#Notations_for_intervals
-class Deducer {
-  final _normalizers = <PackageRef, ConstraintNormalizer>{};
+class VersionSolver {
+  final SolveType type;
+  final SystemCache systemCache;
+  final Package root;
+  final SolverCache cache;
 
-  final _required = <String, Required>{};
+  final _clauses = new Set<Clause>();
 
-  // TODO: these maps should hash description as well, somehow
-  final _disallowed = <PackageRef, Disallowed>{};
+  final _clausesByName = <String, Set<Clause>>{};
 
-  final _dependenciesByDepender = <PackageRef, Set<Dependency>>{};
+  final _decisions = <PackageId>[];
 
-  final _dependenciesByAllowed = <PackageRef, Set<Dependency>>{};
+  final _decisionsByName = <String, PackageId>{};
 
-  final _incompatibilities = <PackageRef, Set<Incompatibility>>{};
+  var _constraints = <String, Constraint>{};
 
-  final _toProcess = new Queue<Fact>();
+  final _constraintsStack = [_constraints];
 
-  /// Facts derived from the current fact being processed in [add].
-  ///
-  /// These may or may not be added to [_toProcess], depending on whether the
-  /// current fact ends up being determined to be redundant.
-  final _fromCurrent = <Fact>[];
+  var _implications = <Term, Set<Term>>{};
 
-  void setAllIds(Iterable<PackageId> ids) {
-    var ref = ids.first.toRef();
-    assert(ids.every((id) => id.toRef() == ref));
-    _normalizers[ref] = new ConstraintNormalizer(ids.map((id) => id.version));
+  final _implicationsStack = [_implications];
+
+  VersionSolver(SolveType type, SystemCache systemCache, this.root)
+      : type = type,
+        systemCache = systemCache,
+        cache = new SolverCache(type, systemCache);
+
+  Future<SolveResult> solve() async {
+    var stopwatch = new Stopwatch..start();
+
+    for (var dep in root.immediateDependencies) {
+      _addClause(new Clause.requirement(dep));
+    }
+
+    while (true) {
+      // Avoid starving the event queue by waiting for a timer-level event.
+      await new Future(() {});
+
+      var id = await _versionToTry();
+      if (id == null) break;
+      _selectVersion(id);
+    }
   }
 
-  void add(Fact initial) {
-    if (debug) print(">> $initial");
-    _toProcess.add(_normalize(initial));
+  // Note: this may add additional clauses, which may cause a backtrack or
+  // detect a global contradiction.
+  Future<PackageId> _versionToTry() {
+    // TODO: be more clever about choosing which package to try. The old solver
+    // selects packages with fewer versions first. It might be even better to
+    // select the least-constrained packages first. We should probably also
+    // handle locked packages here.
 
-    while (!_toProcess.isEmpty) {
-      _fromCurrent.clear();
+    // Try picking packages with concrete constraints first. These are packages
+    // we know we need to select to satisfy the existing selections.
+    var constraint = _constraints.values
+        .firstWhere((constraint) => constraint.positive, orElse: () => null);
 
-      var fact = _toProcess.removeFirst();
-      if (debug) print("  $fact");
-      if (fact is Required) {
-        if (!_requiredIntoRequired(fact)) continue;
-        if (!_requiredIntoDisallowed(fact)) continue;
-        _requiredIntoDependencies(fact);
-        _requiredIntoIncompatibilities(fact);
+    // TODO: what if a constraint exists with an unsatisfiable dep?
+    if (constraint != null) {
+      // If there are no versions of [constraint], try selecting a different
+      // package. [_bestVersionFor] has added a clause that ensures we don't
+      // select the same one.
+      return _bestVersionFor(constraint.deps.single) ?? _versionToTry();
+    }
 
-        _required[fact.dep.name] = fact;
-      } else if (fact is Disallowed) {
-        if (!_disallowedIntoDisallowed(fact)) continue;
-        if (!_disallowedIntoRequired(fact)) continue;
-        _disallowedIntoDependencies(fact);
-        _disallowedIntoIncompatibilities(fact);
-
-        _disallowed[fact.dep.toRef()] = fact;
-      } else if (fact is Dependency) {
-        if (!_dependencyIntoDependency(fact)) continue;
-        if (!_dependencyIntoRequired(fact)) continue;
-        if (!_dependencyIntoDisallowed(fact)) continue;
-        _dependencyIntoIncompatibilities(fact);
-
-        _dependenciesByDepender
-            .putIfAbsent(fact.depender.toRef(), () => new Set())
-            .add(fact);
-        _dependenciesByAllowed
-            .putIfAbsent(fact.allowed.toRef(), () => new Set())
-            .add(fact);
-      } else if (fact is Incompatibility) {
-        if (!_incompatibilityIntoIncompatibilities(fact)) continue;
-        if (!_incompatibilityIntoDisallowed(fact)) continue;
-        if (!_incompatibilityIntoRequired(fact)) continue;
-        _incompatibilityIntoDependencies(fact);
-
-        _incompatibilities
-            .putIfAbsent(fact.dep1.toRef(), () => new Set())
-            .add(fact);
-        _incompatibilities
-            .putIfAbsent(fact.dep2.toRef(), () => new Set())
-            .add(fact);
+    // If there are no (positive) constraints, try a package referred to by the
+    // clauses instead.
+    PackageDep dep;
+    clauses: for (var clause in _clauses) {
+      // Look for a satisfiable positive term in an unsatisfied clause.
+      Term satisfiable;
+      for (var term in clause.terms) {
+        var satisfaction = _satisfaction(term);
+        // If any term in a clause is satisfied, ignore that clause completely.
+        if (satisfaction == _Satisfaction.satisfied) continue clauses;
+        if (satisfaction == _Satisfaction.unsatisfied) continue;
+        if (term.negative) continue;
+        if (dep != null && !term.dep.samePackage(dep)) continue;
+        satisfiable = term;
       }
+      if (satisfiable == null) continue;
 
-      if (debug) print("<< $fact");
-      _toProcess.addAll(_fromCurrent);
+      // Make sure we have the dep that allows the highest max version. This
+      // ensures that we don't pick a lower version than absolutely necessary.
+      if (dep == null || _compareConstraintMax(dep, satisfiable.dep) < 0) {
+        dep = satisfiable.dep;
+      }
+    }
+
+    if (dep == null) return null;
+
+    // TODO: what if no versions exist for this dep? can we guarantee that
+    // that's not possible elsewhere?
+    //
+    // If there are no versions of [dep], try selecting a different package.
+    // [_bestVersionFor] has added a clause that ensures we don't select the
+    // same one.
+    return _bestVersionFor(dep) ?? _versionToTry();
+  }
+
+  Future<PackageId> _bestVersionFor(PackageDep dep) async {
+    Iterable<PackageId> allowed;
+    try {
+      allowed = await cache.getVersions(dep.asRef());
+    } on PackageNotFoundException catch (error) {
+      _addClause(new Clause.prohibition(
+          dep.withConstraint(VersionConstraint.any)));
+      return null;
+    }
+
+    var id = allowed.lastWhere(dep.allows, orElse: () => null);
+    if (id == null) _addClause(new Clause.prohibition(dep));
+    return id;
+  }
+
+  int _compareConstraintMax(VersionConstraint constraint1,
+      VersionConstraint constraint2) {
+    var range1 = constraint1 is VersionUnion
+        ? constraint1.ranges.last
+        : constraint1 as VersionRange;
+    var range2 = constraint2 is VersionUnion
+        ? constraint2.ranges.last
+        : constraint2 as VersionRange;
+    return range1.compareTo(range2);
+  }
+
+  /// Adds a new clause to the deducer and propagates any new information it
+  /// adds.
+  ///
+  /// The new clause may cause the solver to backjump.
+  void _addClause(Clause clause) {
+    _clauses.add(clause);
+
+    for (var term in clause.terms) {
+      _clausesByPackage.putIfAbsent(term.dep.toRef(), () => new Set())
+          .add(clause);
+    }
+
+    var unit = _unitToPropagate(clause);
+    if (unit == _contradiction) {
+      var transitiveImplicators = _transitiveImplicators(implicators);
+      if (!_backjumpTo((id) => transitiveImplicators.contains(id.toRef()))) {
+        throw "Contradiction!";
+      }
+    } else if (unit is Term) {
+      _propagateUnit(unit);
     }
   }
 
-  bool _requiredIntoRequired(Required fact) {
-    var existing = _required[fact.dep.name];
-    if (existing == null) return true;
+  // Returns `null`, a [Term], or `_contradiction`.
+  _unitToPropagate(Clause clause) {
+    Term satisfiable;
+    for (var term in clause.terms) {
+      var satisfaction = _satisfaction(term);
+      // If this term is satisfied, then the clause is already satisfied and we
+      // can't derive anything new from it.
+      if (satisfaction == _Satisfaction.satisfied) return null;
+      if (satisfaction == _Satisfaction.satisfiable) satisfiable = term;
+    }
 
-    var intersection = _intersectDeps(existing.dep, fact.dep);
-    if (intersection == null) {
-      throw new DeductionFailure([existing, fact]);
-    } else if (intersection == existing.dep) {
-      // If [existing] is a subset of [fact], then [fact] is redundant. For
-      // example, if
-      //
-      // * a [0, 2) is required (fact)
-      // * a [0, 1) is required (existing)
-      //
-      // we can throw away [fact].
-      return false;
-    } else if (intersection == existing.dep) {
-      // If [fact] is a subset of [existing], then [existing] is redundant. For
-      // example, if
-      //
-      // * a [0, 1) is required (fact)
-      // * a [0, 2) is required (existing)
-      //
-      // we can throw away [existing].
-      _required.remove(fact.dep.name);
-      return true;
+    if (satisfiable == null) {
+      // If none of the terms in the clause are satisfiable, we've found a
+      // contradiction and we need to backtrack.
+      return _contradiction;
     } else {
-      // Otherwise, create a new requirement from the intersection. For example,
-      // if
-      //
-      // * a [0, 2) is required (fact)
-      // * a [1, 3) is required (existing)
-      //
-      // we can remove both [fact] and [existing] and add
-      //
-      // * a [1, 2) is required
-      _required.remove(fact.dep.name);
-      _replaceCurrent(new Required(intersection, [existing, fact]));
-      return false;
+      _implications.putIfAbsent(unselected, () => new Set())
+          .addAll(clause.terms.where((term) => term != unselected));
+
+      // If there's only one clause that doesn't have a selection, and all the
+      // other clauses are unsatisfied, unit propagation means we have to select
+      // a version for the remaining clause.
+      return satisfiable;
     }
   }
 
-  // Returns whether [fact] should continue to be processed as-is.
-  bool _requiredIntoDisallowed(Required fact) {
-    var ref = fact.dep.toRef();
-    var disallowed = _disallowed[ref];
-    if (disallowed == null) return true;
+  _Satisfaction _satisfaction(Term term) {
+    var selected = _decisionsByName[term.name];
+    if (selected != null) {
+      return term.allows(selected) == term.positive
+          ? _Satisfaction.satisfied
+          : _Satisfaction.unsatisfiable;
+    }
 
-    // Remove [disallowed] since it's redundant with [fact]. We'll update [fact]
-    // to encode the relevant information.
-    _disallowed.remove(ref);
+    var constraint = _constraints[term.name];
+    if (constraint == null) return _Satisfaction.satisfiable;
 
-    var trimmed = _requiredAndDisallowed(fact, disallowed);
-    if (trimmed != null) _replaceCurrent(trimmed);
-    return false;
-  }
-
-  void _requiredIntoDependencies(Required fact) {
-    // TODO: remove dependencies from/onto packages with the same name but
-    // non-matching sources.
-
-    // Dependencies whose depender is exactly [fact.dep], grouped by the names
-    // of packages they depend on.
-    var matchingByAllowed = <String, Set<Dependency>>{};
-
-    // Fill [matchingByAllowed] and trim any irrelevant dependencies while we're
-    // at it.
-    var ref = fact.dep.toRef();
-    var byDepender = _dependenciesByDepender.putIfAbsent(ref, () => new Set());
-    for (var dependency in byDepender.toList()) {
-      var intersection = fact.dep.constraint
-          .intersect(dependency.depender.constraint);
-
-      if (intersection.isEmpty) {
-        // If no versions in [fact] have this dependency, then it's irrelevant.
-        // For example, if
-        //
-        // * a [0, 1) is required (fact)
-        // * a [1, 2) depends on b [0, 2) (dependency)
-        //
-        // we can throw away [dependency].
-        _removeDependency(dependency);
-      } else if (intersection != dependency.depender.constraint) {
-        // If only some versions [dependency.depender] are in [fact], we can
-        // trim the ones that aren't. For example, if
-        //
-        // * a [0, 2) is required (fact)
-        // * a [1, 3) depends on b [0, 2) (dependency)
-        //
-        // we can remove [dependency] and add
-        //
-        // * a [1, 2) depends on b [0, 2) (newDependency)
-        _removeDependency(dependency);
-        var newDependency = new Dependency(
-            dependency.depender.withConstraint(intersection),
-            dependency.allowed,
-            [dependency, fact]);
-        _fromCurrent.add(newDependency);
-        matchingByAllowed
-            .putIfAbsent(newDependency.allowed.name, () => new Set())
-            .add(newDependency);
+    if (constraint.positive) {
+      var constraintDep = constraint.deps.single;
+      if (term.positive) {
+        if (term.dep.allowsAll(constraintDep)) return _Satisfaction.satisfied;
+        if (term.dep.allowsAny(constraintDep)) return _Satisfaction.satisfiable;
+        return _Satisfaction.unsatisfiable;
       } else {
-        matchingByAllowed
-            .putIfAbsent(dependency.allowed.name, () => new Set())
-            .add(dependency);
+        return constraintDep.allowsAll(term.dep)
+            ? _Satisfaction.unsatisfiable
+            : _Satisfaction.satisfiable;
       }
-    }
-
-    // Go through the dependencies from [fact]'s package onto each other package
-    // to see if we can create any new requirements from them. For example, if
-    //
-    // * a [0, 2) is required (fact)
-    // * a [0, 1) depends on b [0, 1) (in matchingByAllowed)
-    // * a [1, 2) depends on b [1, 2) (in matchingByAllowed)
-    //
-    // we can add
-    //
-    // * b [0, 2) is required
-    for (var dependencies in matchingByAllowed.values) {
-      var allowed = _transitiveAllowed(fact.dep, dependencies);
-      if (allowed == null) continue;
-
-      _fromCurrent.add(new Required(
-          allowed, new List.from(dependencies)..add(fact)));
-
-      // If [fact] was covered by a single dependency, that dependency is now
-      // redundant and can be removed. For example, if
-      //
-      // * a [0, 2) is required (fact)
-      // * a [0, 2) depends on b [0, 1) (in matchingByAllowed)
-      //
-      // we can remove the dependency and add
-      //
-      // * b [0, 1) is required
-      if (dependencies.length == 1) _removeDependency(dependencies.single);
-    }
-
-    // Trim any dependencies whose allowed versions aren't covered by [fact].
-    var byAllowed = _dependenciesByAllowed.putIfAbsent(ref, () => new Set());
-    for (var dependency in byAllowed.toList()) {
-      var result = _requiredAndAllowed(fact, dependency);
-      if (result == dependency) continue;
-
-      _removeDependency(dependency);
-      if (result != null) _fromCurrent.add(result);
-    }
-  }
-
-  void _requiredIntoIncompatibilities(Required fact) {
-    // Remove any incompatibilities that are no longer relevant.
-    var incompatibilities = _incompatibilities.putIfAbsent(
-        fact.dep.toRef(), () => new Set());
-    for (var incompatibility in incompatibilities.toList()) {
-      _removeIncompatibility(incompatibility);
-      var result = _requiredAndIncompatibility(fact, incompatibility);
-      if (result != null) _fromCurrent.add(result);
-    }
-  }
-
-  bool _disallowedIntoDisallowed(Disallowed fact) {
-    var ref = fact.dep.toRef();
-    var existing = _disallowed[ref];
-    if (existing == null) return true;
-
-    var merged = _mergeDeps([fact.dep, existing.dep]);
-    if (merged == existing.dep) {
-      // If [existing] is a superset of [fact], then [fact] is redundant. For
-      // example, if
-      //
-      // * a [0, 1) is disallowed (fact)
-      // * a [0, 2) is disallowed (existing)
-      //
-      // we can throw away [fact].
-      return false;
-    } else if (merged == fact.dep) {
-      // If [fact] is a superset of [existing], then [existing] is redundant.
-      // For example, if
-      //
-      // * a [0, 2) is disallowed (fact)
-      // * a [0, 1) is disallowed (existing)
-      //
-      // we can throw away [existing].
-      _disallowed.remove(ref);
-      return true;
     } else {
-      // Otherwise, we merge the two facts together. For example, if
-      //
-      // * a [0, 1) is disallowed (fact)
-      // * a [1, 2) is disallowed (existing)
-      //
-      // we can remove both [fact] and [existing] and add
-      //
-      // * a [0, 2) is disallowed
-      _disallowed.remove(ref);
-      _replaceCurrent(new Disallowed(merged, [existing, fact]));
-      return false;
+      for (var dep in constraint.deps) {
+        if (constraint.dep.allowsAll(term.dep)) {
+          return term.positive
+              ? _Satisfaction.unsatisfiable
+              : _Satisfaction.satisfied;
+        }
+      }
+      return _Satisfaction.satisfiable;
     }
   }
 
-  bool _disallowedIntoRequired(Disallowed fact) {
-    var required = _required[fact.dep.name];
-    if (required == null) return true;
+  // Returns the ID of the last 
+  void _propagateUnit(Term unit) {
+    var toPropagate = new Set.from([unit]);
+    while (!toPropagate.isEmpty) {
+      var term = toPropagate.remove(toPropagate.first);
+      var oldConstraint = _constraints[term];
+      var constraint = oldConstraint == null
+          ? new Constraint.fromTerm(term)
+          : oldConstraint.withTerm(term);
 
-    // If there's a [Required] matching [fact], delete [fact] and modify the
-    // [Required] instead. We prefer [Required] because it's more specific. For
-    // example, if
-    //
-    // * a [0, 1) is disallowed (fact)
-    // * a [0, 2) is required (required)
-    //
-    // we can remove [fact] and [required] and add
-    //
-    // * a [1, 2) is required
-    _required.remove(fact.dep.name);
-    var trimmed = _requiredAndDisallowed(required, fact);
-    if (trimmed != null) _replaceCurrent(trimmed);
-    return false;
-  }
+      // If the new unit doesn't add any additional information to the constraint,
+      // there's nothing new to propagate.
+      if (constraint == oldConstraint) return;
+      _constraints[term] = constraint;
 
-  void _disallowedIntoDependencies(Disallowed fact) {
-    // Trim dependencies from [fact.dep].
-    var ref = fact.dep.toRef();
-    var byDepender = _dependenciesByDepender.putIfAbsent(ref, () => new Set());
-    for (var dependency in byDepender.toList()) {
-      var result = _disallowedAndDepender(fact, dependency);
-      if (result == dependency) continue;
-      _removeDependency(dependency);
-      if (result != null) _fromCurrent.add(dependency);
-    }
+      for (var clause in _clausesByName[term.dep.name]) {
+        var newUnit = _unitToPropagate(clause);
+        if (newUnit == null) continue;
+        if (newUnit is Term) {
+          toPropagate.add(newUnit);
+          continue;
+        }
 
-    // Trim dependencies onto [fact.dep].
-    var byAllowed = _dependenciesByAllowed.putIfAbsent(ref, () => new Set());
-    for (var dependency in byAllowed.toList()) {
-      var result = _disallowedAndAllowed(fact, dependency);
-      if (result == dependency) continue;
-      _removeDependency(dependency);
-      _fromCurrent.add(result);
-    }
-  }
+        assert(newUnit == _contradiction);
+        // TODO: is selecting based on name right here? what about multiple
+        // negations?
+        var implicators = _implications[term] ?? new Set();
+        implicators.addAll(
+            clause.terms.where((clauseTerm) => clauseTerm.name != unit.name));
 
-  void _disallowedIntoIncompatibilities(Disallowed fact) {
-    // Remove any incompatibilities that are no longer relevant.
-    var incompatibilities = _incompatibilities
-        .putIfAbsent(fact.dep.toRef(), () => new Set());
-    for (var incompatibility in incompatibilities.toList()) {
-      var result = _disallowedAndIncompatibility(fact, incompatibility);
-      if (result == incompatibility) continue;
-      _removeIncompatibility(incompatibility);
-      if (result != null) _fromCurrent.add(result);
+        var transitiveImplicators = _transitiveImplicators(implicators);
+        if (!_backjumpTo((id) => transitiveImplicators.contains(id.toRef()))) {
+          throw "Contradiction!";
+        }
+        _addClause(new Clause(implicators));
+        return;
+      }
     }
   }
 
-  bool _dependencyIntoDependency(Dependency fact) {
-    // Other dependencies from the same package onto the same target. This is
-    // used later on to determine whether we can merge this with existing
-    // dependencies.
-    var siblings = <Dependency>[];
+  // Returns whether or not a global contradiction has been found.
+  bool _backjumpTo(bool selector(PackageId id)) {
+    var i = lastIndexWhere(_decisions, selector);
+    if (i == null) return false;
 
-    // Check whether [fact] can be merged with other dependencies with the same
-    // depender and allowed.
-    var byDepender = _dependenciesByDepender.putIfAbsent(
-        fact.depender.toRef(), () => new Set());
-    for (var dependency in byDepender.toList()) {
-      if (!dependency.allowed.samePackage(fact.allowed)) continue;
-
-      if (dependency.allowed == fact.allowed) {
-        var merged = _mergeDeps([dependency.depender, fact.depender]);
-        if (merged == dependency.depender) {
-          // If [fact.depender] is a subset of [dependency.depender], [fact] is
-          // redundant. For example, if
-          //
-          // * a [0, 1) depends on b [0, 1) (fact)
-          // * a [0, 2) depends on b [0, 1) (dependency)
-          //
-          // we can throw away [fact].
-          return false;
-        } else if (merged == fact.depender) {
-          // If [dependency.depender] is a subset of [fact.depender],
-          // [dependency] is redundant. For example, if
-          //
-          // * a [0, 2) depends on b [0, 1) (fact)
-          // * a [0, 1) depends on b [0, 1) (dependency)
-          //
-          // we can throw away [dependency].
-          _removeDependency(dependency);
-        } else {
-          // Otherwise, create a new requirement from the union. For example, if
-          //
-          // * a [0, 1) depends on b [0, 1) (fact)
-          // * a [1, 2) depends on b [0, 1) (dependency)
-          //
-          // we can remove both [fact] and [dependency] and add
-          //
-          // * a [0, 2) depends on b [0, 1).
-          _removeDependency(dependency);
-          _replaceCurrent(
-              new Dependency(merged, fact.allowed, [dependency, fact]));
-          return false;
-        }
-        continue;
-      }
-
-      if (!dependency.depender.constraint.allowsAny(fact.depender.constraint)) {
-        // If the dependers don't overlap at all and the allowed versions are
-        // different, there's no useful merging we can do.
-        siblings.add(dependency);
-        continue;
-      }
-
-      // If [fact] has a different allowed constraint than [dependency] but
-      // their dependers overlap, remove the part that's overlapping. This
-      // ensures that, for a given depender/allowed pair, there will be only
-      // one dependency for each depender version.
-      if (fact.allowed.constraint.allowsAll(dependency.allowed.constraint)) {
-        // If [fact] allows strictly more versions than [dependency], remove
-        // any overlap from [fact] because it's less specific. For example,
-        // if
-        //
-        // * a [1, 3) depends on b [0, 2) (fact)
-        // * a [2, 4) depends on b [1, 2) (dependency)
-        //
-        // we can remove [fact] and add
-        //
-        // * a [1, 2) depends on b [0, 2).
-        var difference = _depMinus(fact.depender, dependency.depender);
-        if (difference != null) {
-          _replaceCurrent(new Dependency(
-              difference, fact.allowed, [dependency, fact]));
-        }
-        return false;
-      } else if (dependency.allowed.constraint
-          .allowsAll(fact.allowed.constraint)) {
-        _removeDependency(dependency);
-
-        // If [dependency] allows strictly more versions than [fact], remove
-        // any overlap from [dependency] because it's less specific. For
-        // example, if
-        //
-        // * a [1, 3) depends on b [1, 2) (fact)
-        // * a [2, 4) depends on b [0, 2) (dependency)
-        //
-        // we can remove [dependency] and add
-        //
-        // * a [3, 4) depends on b [0, 2).
-        var difference = _depMinus(dependency.depender, fact.depender);
-        if (difference == null) continue;
-
-        _fromCurrent.add(new Dependency(
-            difference, dependency.allowed, [dependency, fact]));
-      } else {
-        // If [fact] and [dependency]'s allowed targets overlap without one
-        // being a subset of the other, we need to create a third dependency
-        // that represents the intersection. For example, if
-        //
-        // * a [1, 3) depends on b [0, 2) (fact)
-        // * a [2, 4) depends on b [1, 3) (dependency)
-        //
-        // we can remove both [fact] and [dependency] and add
-        //
-        // * a [1, 2) depends on b [0, 2)
-        // * a [2, 3) depends on b [1, 2)
-        // * a [3, 4) depends on b [1, 3)
-        _removeDependency(dependency);
-
-        var dependencyIntersection =
-            _intersectDeps(dependency.depender, fact.depender);
-        var allowedIntersection =
-            _intersectDeps(dependency.allowed, fact.allowed);
-        if (allowedIntersection == null) {
-          // If there's no overlapping allowed versions, then the interesecting
-          // dependency is just disallowed entirely.
-          _replaceCurrent(
-              new Disallowed(dependencyIntersection, [dependency, fact]));
-        } else {
-          _replaceCurrent(new Dependency(
-              dependencyIntersection,
-              allowedIntersection,
-              [dependency, fact]));
-        }
-
-        var dependencyDifference = _depMinus(dependency.depender, fact.depender);
-        if (dependencyDifference != null) {
-          // Unless [fact] covers the entirety of [dependency], trim
-          // [dependency] to exclude the intersection.
-          _replaceCurrent(new Dependency(
-              dependencyDifference, dependency.allowed, [dependency, fact]));
-        }
-
-        var factDifference = _depMinus(fact.depender, dependency.depender);
-        if (factDifference != null) {
-          // Unless [dependency] covers the entirety of [fact], trim [fact] to
-          // exclude the intersection.
-          _replaceCurrent(new Dependency(
-              factDifference, fact.allowed, [dependency, fact]));
-        }
-
-        return false;
-      }
+    for (var id in _decisions.skip(i)) {
+      _decisionsByName.remove(id.name);
     }
 
-    // TODO: multiple dependencies on the same allowed may be incompatible. For
-    // example, if:
-    //
-    // * a [0, 1) depends on b [0, 1)
-    // * c [0, 1) depends on b [1, 2)
-    //
-    // we can add
-    //
-    //* a [0, 1) is incompatible with c [0, 1)
+    _decisions.removeRange(i, _decisions.length);
+    _constraintsStack.removeRange(i + 1, _constraintsStack.length);
+    _implicationsStack.removeRange(i + 1, _implicationsStack.length);
 
-    // A map containing all dependencies from [fact.allowed] onto other
-    // packages, indexed by their `allowed` packages.
-    var dependencyByAllowed = groupBy(
-        _dependenciesByDepender
-            .putIfAbsent(fact.allowed.toRef(), () => new Set())
-            .where((dependency) => fact.allowed.constraint.allowsAny(
-                dependency.depender.constraint)),
-        (dependency) => dependency.allowed.toRef());
-
-    // Check if there's a circular dependency between [fact.allowed] and
-    // [fact.depender].
-    var reverse = dependencyByAllowed.remove(fact.depender.toRef());
-    if (reverse != null) {
-      var disallowed = _dependencyAndReverse(fact, reverse);
-      if (disallowed != null) {
-        if (disallowed.dep.constraint == fact.depender.constraint) {
-          _toProcess.add(disallowed);
-          return false;
-        } else {
-          _fromCurrent.add(disallowed);
-        }
-      }
-    }
-
-    for (var dependencies in dependencyByAllowed.values) {
-      // Merge [fact] with dependencies *from* [fact.allowed] to see if we can
-      // deduce anything about transitive dependencies. For example, if
-      //
-      // * a [0, 1) depends on b [0, 2) (fact)
-      // * b [0, 1) depends on c [0, 1) (in byAllowed)
-      // * b [1, 2) depends on c [1, 2) (in byAllowed)
-      //
-      // we can add
-      //
-      // * a [0, 1) depends on c [0, 2)
-      var allowed = _transitiveAllowed(fact.allowed, dependencies);
-      if (allowed == null) continue;
-
-      _fromCurrent.add(new Dependency(
-          fact.depender, allowed, dependencies.toList()..add(fact)));
-    }
-
-    var dependerByAllowed = _dependenciesByAllowed
-        .putIfAbsent(fact.depender.toRef(), () => new Set());
-    for (var dependency in dependerByAllowed) {
-      if (!dependency.allowed.constraint.allowsAny(fact.depender.constraint)) {
-        continue;
-      }
-
-      // Merge [fact] with dependencies *onto* [fact.depender]. For example, if
-      //
-      // * b [0, 1) depends on c [0, 1) (fact)
-      // * b [1, 2) depends on c [1, 2) (in siblings)
-      // * a [0, 1) depends on b [0, 2) (dependency)
-      //
-      // we can add
-      //
-      // * a [0, 1) depends on c [1, 2)
-      var relevant = siblings
-          .where((sibling) => dependency.allowed.constraint
-              .allowsAny(sibling.depender.constraint))
-          .toList()..add(fact);
-
-      // Handle circular dependencies.
-      if (dependency.depender.samePackage(fact.allowed)) {
-        var disallowed = _dependencyAndReverse(dependency, relevant);
-        if (disallowed != null) _fromCurrent.add(disallowed);
-        continue;
-      }
-
-      var allowed = _transitiveAllowed(fact.depender, relevant);
-      if (allowed == null) continue;
-
-      _fromCurrent.add(new Dependency(
-          dependency.depender, allowed, [dependency]..addAll(relevant)));
-    }
+    _constraints = _constraintsStack.last;
+    _implications = _implicationsStack.last;
 
     return true;
   }
 
-  bool _dependencyIntoRequired(Dependency fact) {
-    var required = _required[fact.depender.name];
-    if (required != null) {
-      if (!required.dep.samePackage(fact.depender)) return false;
+  Set<PackageRef> _transitiveImplicators(Iterable<Term> terms) {
+    var implicators = new Set<PackageRef>();
+    var toCheck = terms.toSet();
+    while (!toCheck.isEmpty) {
+      var term = toCheck.removeLast();
+      if (!implicators.add(term.dep.toRef())) continue;
 
-      // Trim [fact] or throw it away if it's irrelevant. For example, if
-      //
-      // * a [0, 2) depends on b [0, 1) (fact)
-      // * a [1, 3) is required (required)
-      //
-      // we can remove [fact] and add
-      //
-      // * a [1, 2) depends on b [0, 1)
-      //
-      // If this would produce an empty depender, we instead remove [dependency]
-      // entirely.
-      var intersection = required.dep.constraint
-          .intersect(fact.depender.constraint);
-      if (intersection.isEmpty) return false;
-      if (intersection != fact.depender.constraint) {
-        _replaceCurrent(new Dependency(
-            fact.depender.withConstraint(intersection),
-            fact.allowed,
-            [required, fact]));
-        return false;
-      }
-
-      // If [fact]'s depender is required, see if we can come up with a merged
-      // requirement based on all its sibling dependencies. For example, if
-      //
-      // * a [0, 1) depends on b [0, 1) (fact)
-      // * a [1, 2) depends on b [1, 2) (in siblings)
-      // * a [0, 2) is required (required)
-      //
-      // we can add
-      //
-      // * b [0, 2) is required
-      var allowedRef = fact.allowed.toRef();
-      var siblings = _dependenciesByDepender[fact.depender.toRef()]
-          .where((dependency) => dependency.allowed.samePackage(allowedRef))
-          .toList()..add(fact);
-      var allowed = _transitiveAllowed(required.dep, siblings);
-      if (allowed != null) {
-        var newRequired = new Required(allowed, [required]..addAll(siblings));
-
-        // If [fact] entirely covered [required], [fact] is now redundant and
-        // can be discarded. For example, if
-        //
-        // * a [0, 1) depends on b [0, 1) (fact)
-        // * a [0, 1) is required (required)
-        //
-        // we can remove [fact] and add
-        //
-        // * b [0, 1) is required
-        if (siblings.length == 1) {
-          _replaceCurrent(newRequired);
-          return false;
-        } else {
-          _fromCurrent.add(newRequired);
-        }
-      }
+      toCheck.addAll(_implications[term] ?? const []);
     }
-
-    /// Trim [fact]'s allowed version if it's not covered by a requirement.
-    required = _required[fact.allowed.name];
-    if (required == null) return true;
-
-    var result = _requiredAndAllowed(required, fact);
-    if (result == fact) return true;
-    if (result != null) _replaceCurrent(result);
-    return false;
+    return implicators;
   }
+}
 
-  bool _dependencyIntoDisallowed(Dependency fact) {
-    // Trim [fact] if some of its depender is disallowed.
-    var disallowed = _disallowed[fact.depender.toRef()];
-    if (disallowed != null) {
-      var result = _disallowedAndDepender(disallowed, fact);
-      if (result != fact) {
-        if (result != null) _replaceCurrent(result);
-        return false;
-      }
-    }
+class _Satisfaction {
+  static const satisfied = const _Satisfaction._(this("satisfied");
+  static const satisfiable = const _Satisfaction._(this("satisfiable");
+  static const unsatisfiable = const _Satisfaction._(this("unsatisfiable");
 
-    // Trim [fact] if some of its allowed versions are disallowed.
-    disallowed = _disallowed[fact.allowed.toRef()];
-    if (disallowed != null) {
-      var result = _disallowedAndAllowed(disallowed, fact);
-      if (result != fact) {
-        if (result != null) _replaceCurrent(result);
-        return false;
-      }
-    }
+  final String _name;
 
-    return true;
-  }
+  const _Satisfaction._(this._name);
 
-  void _dependencyIntoIncompatibilities(Dependency fact) {
-    var byNonMatching = groupBy(
-        _incompatibilities.putIfAbsent(fact.allowed.toRef(), () => new Set()),
-        (incompatibility) =>
-            _nonMatching(incompatibility, fact.allowed).toRef());
-    for (var incompatibilities in byNonMatching.values) {
-      // If there are incompatibilities where one side covers a [fact.allowed]
-      // and the other side has a non-empty intersection, we can create a new
-      // incompatibility for [fact.depender]. For example, if
-      //
-      // * a [0, 1) depends on b [0, 2) (fact)
-      // * b [0, 1) is incompatible with c [0, 2) (in incompatibilities)
-      // * b [1, 2) is incompatible with c [1, 3) (in incompatibilities)
-      //
-      // we can add
-      //
-      // * a [0, 1) is incompatible with c [1, 3)
-      var incompatible = _transitiveIncompatible(
-          fact.allowed, incompatibilities);
-      if (incompatible == null) continue;
-
-      _fromCurrent.add(new Incompatibility(fact.depender, incompatible,
-          new List<Fact>.from(incompatibilities)..add(fact)));
-    }
-  }
-
-  bool _incompatibilityIntoIncompatibilities(Incompatibility fact) {
-    merge(PackageDep dep) {
-      assert(dep == fact.dep1 || dep == fact.dep2);
-      var otherDep = dep == fact.dep1 ? fact.dep2 : fact.dep1;
-
-      var incompatibilities = _incompatibilities
-          .putIfAbsent(dep.toRef(), () => new Set());
-      for (var incompatibility in incompatibilities) {
-        // Try to merge [fact] with adjacent incompatibilities. For example, if
-        //
-        // * a [0, 1) is incompatible with b [0, 1) (fact)
-        // * a [1, 2) is incompatible with b [0, 1) (incompatibility)
-        //
-        // we can remove [fact] and [incompatibility] and add
-        //
-        // * a [0, 2) is incompatible with b [0, 1)
-        var different = _nonMatching(incompatibility, dep);
-        if (different != otherDep) continue;
-
-        var same = _matching(incompatibility, dep);
-        var merged = _mergeDeps([dep, same]);
-        if (merged == null) continue;
-        _removeIncompatibility(incompatibility);
-        _replaceCurrent(
-            new Incompatibility(merged, otherDep, [incompatibility, fact]));
-        return false;
-      }
-
-      return true;
-    }
-
-    return merge(fact.dep1) && merge(fact.dep2);
-  }
-
-  bool _incompatibilityIntoRequired(Incompatibility fact) {
-    // We only have to resolve one [Required], since it will always cause us to
-    // remove the incompatibility and add a new fact of a different type.
-    var required = _required[fact.dep1.name] ?? _required[fact.dep2.name];
-    if (required == null) return true;
-    var result = _requiredAndIncompatibility(required, fact);
-
-    if (result != null) _replaceCurrent(result);
-    return false;
-  }
-
-  bool _incompatibilityIntoDisallowed(Incompatibility fact) {
-    var disallowed = _disallowed[fact.dep1.toRef()];
-    if (disallowed != null) {
-      var result = _disallowedAndIncompatibility(disallowed, fact);
-      if (result != fact) {
-        if (result != null) _replaceCurrent(result);
-        return false;
-      }
-    }
-
-    disallowed = _disallowed[fact.dep2.toRef()];
-    if (disallowed != null) {
-      var result = _disallowedAndIncompatibility(disallowed, fact);
-      if (result != fact) {
-        if (result != null) _replaceCurrent(result);
-        return false;
-      }
-    }
-
-    return true;
-  }
-
-  void _incompatibilityIntoDependencies(Incompatibility fact) {
-    // Get all the incompatibilities with the same pair of packages as [fact].
-    var ref1 = fact.dep1.toRef();
-    var ref2 = fact.dep2.toRef();
-    var siblings = _incompatibilities[ref1]
-        .where((incompatibility) =>
-            incompatibility.dep1.samePackage(ref2) ||
-            incompatibility.dep2.samePackage(ref2))
-        .toList()..add(fact);
-
-    // If there are dependencies whose allowed constraints are covered entirely
-    // by [siblings], we can probably create a new incompatibility for their
-    // dependers. For example, if
-    //
-    // * a [0, 1) is incompatible with b [0, 2) (fact)
-    // * a [1, 2) is incompatible with b [1, 3) (in siblings)
-    // * c [0, 1) depends on a [0, 2) (dependency)
-    //
-    // we can add
-    //
-    // * c [0, 1) is incompatible with b [1, 3)
-
-    // TODO: do we need special handling for "a depends on b" + "a is
-    // incompatible with b"?
-
-    for (var dependency in
-        _dependenciesByAllowed.putIfAbsent(ref1, () => new Set())) {
-      var incompatible = _transitiveIncompatible(dependency.allowed, siblings);
-      if (incompatible == null) continue;
-      _fromCurrent.add(new Incompatibility(dependency.depender, incompatible,
-          [dependency]..addAll(siblings)));
-    }
-
-    for (var dependency in
-        _dependenciesByAllowed.putIfAbsent(ref2, () => new Set())) {
-      var incompatible = _transitiveIncompatible(dependency.allowed, siblings);
-      if (incompatible == null) continue;
-      _fromCurrent.add(new Incompatibility(dependency.depender, incompatible,
-          [dependency]..addAll(siblings)));
-    }
-  }
-
-  // Resolves [required] and [disallowed], which should refer to the same
-  // package.
-  //
-  // Returns a trimmed copy of [required], or `null` if it had no overlap with
-  // [disallowed].
-  Required _requiredAndDisallowed(Required required, Disallowed disallowed) {
-    assert(required.dep.samePackage(disallowed.dep));
-
-    var difference = required.dep.constraint.difference(
-        disallowed.dep.constraint);
-    if (difference.isEmpty) throw new DeductionFailure([required, disallowed]);
-    if (difference == required.dep.constraint) return null;
-
-    return new Required(
-        required.dep.withConstraint(difference), [required, disallowed]);
-  }
-
-  /// Resolves [required] and [dependency.allowed], which should refer to the
-  /// same package.
-  ///
-  /// Returns a new fact to replace [dependency] (either a [Disallowed] or a
-  /// [Dependency]), or `null` if the dependency is irrelevant.
-  Fact _requiredAndAllowed(Required required, Dependency dependency) {
-    assert(required.dep.name == dependency.allowed.name);
-
-    var intersection = _intersectDeps(required.dep, dependency.allowed);
-    if (intersection == null) {
-      // If there are no versions covered by both [dependency.allowed] and
-      // [required], then this dependency can never be satisfied and the
-      // depender should be disallowed entirely. For example, if
-      //
-      // * a [0, 1) is required (required)
-      // * b [0, 1) depends on a [1, 2) (dependency)
-      //
-      // we can remove [dependency] and add
-      //
-      // * b [0, 1) is disallowed
-      return new Disallowed(dependency.depender, [dependency, required]);
-    } else if (intersection == required.dep) {
-      // If [intersection] is exactly [required.dep], then this dependency adds
-      // no information in addition to [required], so it can be discarded
-      // entirely. For example, if
-      //
-      // * a [0, 1) is required (required)
-      // * b [0, 1) depends on a [0, 2) (dependency)
-      //
-      // we can throw away [dependency].
-      return null;
-    } else if (intersection == dependency.allowed) {
-      // If [intersection] is exactly [dependency.allowed.constraint], then
-      // [dependency] can be preserved as-is. For example, if
-      //
-      // * a [0, 2) is required (required)
-      // * b [0, 1) depends on a [0, 1) (dependency)
-      //
-      // there are no changes to be made.
-      return dependency;
-    } else {
-      // If some but not all packages covered by [dependency.allowed] are
-      // covered by [required], replace [dependency] with one with a narrower
-      // constraint. For example, if
-      //
-      // * a [0, 2) is required (required)
-      // * b [0, 1) depends on a [1, 3) (dependency)
-      //
-      // we can remove [dependency] and add
-      //
-      // * b [0, 1) depends on a [1, 2)
-      return new Dependency(
-          dependency.depender, intersection, [dependency, required]);
-    }
-  }
-
-  /// Resolves [disallowed] and [dependency.depender], which should refer to the
-  /// same package.
-  ///
-  /// Returns a new [Dependency] to replace [dependency], or `null` if the
-  /// dependency is irrelevant. This dependency may be identical to
-  /// [dependency].
-  Dependency _disallowedAndDepender(Disallowed disallowed,
-      Dependency dependency) {
-    assert(disallowed.dep.name == dependency.depender.name);
-
-    var trimmed = _depMinus(dependency.depender, disallowed.dep);
-    if (trimmed == null) {
-      // If all versions in [dependency.depender] are covered by [disallowed],
-      // the dependency is irrelevant and can be discarded. For example, if
-      //
-      // * a [0, 2) is disallowed (disallowed)
-      // * a [0, 1) depends on b [0, 1) (dependency)
-      //
-      // we can throw away [dependency].
-      return null;
-    } else if (trimmed.constraint == dependency.depender.constraint) {
-      // If no versions in [dependency.depender] are covered by [disallowed],
-      // the dependency is fine as-is. For example, if
-      //
-      // * a [0, 1) is disallowed (disallowed)
-      // * a [1, 2) depends on b [0, 1) (dependency)
-      //
-      // there are no changes to be made.
-      return dependency;
-    } else {
-      // If [disallowed] covers some but not all of [dependency.depender], trim
-      // the dependency so that its depender doesn't include disallowed
-      // versions. For example, if
-      //
-      // * a [0, 1) is disallowed (fact)
-      // * a [0, 2) depends on b [0, 1) (dependency)
-      //
-      // we can remove [dependency] and add
-      //
-      // * a [1, 2) depends on b [0, 1)
-      return new Dependency(
-          trimmed, dependency.allowed, [dependency, disallowed]);
-    }
-  }
-
-  /// Resolves [disallowed] and [dependency.allowed], which should refer to the
-  /// same package.
-  ///
-  /// Returns a new fact to replace [dependency] (either a [Disallowed] or a
-  /// [Dependency]).
-  Fact _disallowedAndAllowed(Disallowed disallowed,
-      Dependency dependency) {
-    assert(disallowed.dep.name == dependency.allowed.name);
-
-    var trimmed = _depMinus(dependency.allowed, disallowed.dep);
-    if (trimmed == null) {
-      // If all versions in [dependency.allowed] are covered by [disallowed],
-      // then this dependency can never be satisfied and the depender should be
-      // disallowed entirely. For example, if
-      //
-      // * a [0, 1) is disallowed (disallowed)
-      // * b [0, 1) depends on a [0, 1) (dependency)
-      //
-      // we can throw away [dependency] and add
-      //
-      // * b [0, 1) is disallowed
-      return new Disallowed(dependency.depender, [dependency, disallowed]);
-    } else if (trimmed.constraint == dependency.allowed.constraint) {
-      // If no versions in [dependency.allowed] are covered by [disallowed],
-      // the dependency is fine as-is. For example, if
-      //
-      // * a [0, 1) is disallowed (disallowed)
-      // * b [0, 1) depends on a [1, 2) (dependency)
-      //
-      // there are no changes to be made.
-      return dependency;
-    } else {
-      // If [disallowed] covers some but not all of [dependency.allowed], trim
-      // the dependency so that it doesn't allow disallowed versions. For
-      // example, if
-      //
-      // * a [0, 1) is disallowed (fact)
-      // * b [0, 1) depends on a [0, 2) (dependency)
-      //
-      // we can remove [dependency] and add
-      //
-      // * b [0, 1) depends on a [1, 2)
-      return new Dependency(
-          dependency.depender, trimmed, [dependency, disallowed]);
-    }
-  }
-
-  /// Resolves [required] and [incompatibility].
-  ///
-  /// One of [incompatibility]'s packages should be the same as [required.dep].
-  ///
-  /// Returns a new fact to replace [incompatibility], or `null` if
-  /// [incompatibility] is irrelevant.
-  Fact _requiredAndIncompatibility(Required required,
-      Incompatibility incompatibility) {
-    assert(required.dep.name == incompatibility.dep1.name ||
-        required.dep.name == incompatibility.dep2.name);
-    var same = _matching(incompatibility, required.dep);
-    var different = _nonMatching(incompatibility, required.dep);
-
-    // The versions of [required.dep] that aren't in [same], and thus that are
-    // compatible with [different].
-    var compatible = _depMinus(required.dep, same);
-    if (compatible == null) {
-      // If [required] is incompatible with all versions of [different], then
-      // [different] must be disallowed entirely. For example, if
-      //
-      // * a [0, 1) is required (required)
-      // * a [0, 1) is incompatible with b [0, 1) (incompatibility)
-      //
-      // we can remove [incompatibility] and add
-      //
-      // * b [0, 1) is disallowed
-      return new Disallowed(different, [incompatibility, required]);
-    } else if (compatible.constraint != required.dep.constraint) {
-      // If [required] allows versions outside of [same], then we can reframe this
-      // incompatibility as a dependency from [different] onto [required.dep].
-      // This is safe because [required.dep] needs to be selected anyway. For
-      // example, if
-      //
-      // * a [0, 2) is required (required)
-      // * a [0, 1) is incompatible with b [0, 1) (incompatibility)
-      //
-      // we can remove [incompatibility] and add
-      //
-      // * b [0, 1) depends on a [1, 2)
-      return new Dependency(different, compatible, [incompatibility, required]);
-    } else {
-      // There's no need to do anything else if *all* the versions allowed by
-      // [required] are outside of [same], since one of those versions is already
-      // required. For example, if
-      //
-      // * a [0, 1) is required (required)
-      // * a [1, 2) is incompatible with b [0, 1) (incompatibility)
-      //
-      // we can throw away [incompatibility].
-      return null;
-    }
-  }
-
-  Incompatibility _disallowedAndIncompatibility(Disallowed disallowed,
-      Incompatibility incompatibility) {
-    var same = _matching(incompatibility, disallowed.dep);
-    var different = _nonMatching(incompatibility, disallowed.dep);
-
-    var trimmed = _depMinus(same, disallowed.dep);
-    if (trimmed == null) {
-      // If [disallowed] disallows all of the versions in [same], the
-      // incompatibility is irrelevant and can be removed. For example, if
-      //
-      // * a [0, 1) is disallowed (disallowed)
-      // * b [0, 1) is incompatible with a [0, 1) (incompatibility)
-      //
-      // we can throw away [incompatibility].
-      return null;
-    } else if (trimmed == same.constraint) {
-      // If [disallowed] doesn't disallow any of the versions in [same], the
-      // incompatibility is fine as-is. For example, if
-      //
-      // * a [0, 1) is disallowed (disallowed)
-      // * a [1, 2) is incompatible with b [0, 1) (incompatibility)
-      //
-      // there are no changes to be made.
-      return incompatibility;
-    } else {
-      // If [disallowed] disallows some but not all of the versions in [same], we
-      // create a new incompatibility with narrower versions. For example, if
-      //
-      // * a [1, 2) is disallowed (disallowed)
-      // * a [0, 2) is incompatible with b [0, 1) (incompatibility)
-      //
-      // we can remove [incompatibility] and add
-      //
-      // * a [0, 1) is incompatible with b [0, 1)
-      return new Incompatibility(
-          trimmed, different, [incompatibility, disallowed]);
-    }
-  }
-
-  /// Handle a circular dependency.
-  ///
-  /// This assumes that [dependency.depender] refers to the same package as all
-  /// `allowed` packages in [reverse], and that [dependency.allowed] refers to
-  /// the same package as all `depender` packages in [reverse].
-  ///
-  /// Returns either a [Disallowed] that covers [dependency.depender], or `null`
-  /// indicating that no versions should be disallowed.
-  Disallowed _dependencyAndReverse(Dependency dependency,
-      Iterable<Dependency> reverse) {
-    var allowed = _transitiveAllowed(dependency.allowed, reverse);
-    if (allowed == null) return null;
-
-    var intersection = _intersectDeps(dependency.depender, allowed);
-    if (intersection == null) {
-      // If [allowed] doesn't allow any versions of [fact.depender], we can
-      // disallow the whole thing. For example, if
-      //
-      // * a [0, 1) depends on b [0, 1) (dependency)
-      // * b [0, 1) depends on a [1, 2) (in reverse)
-      //
-      // we can add
-      //
-      // * a [0, 1) is disallowed
-      return new Disallowed(
-          dependency.depender, reverse.toList()..add(dependency));
-    } else if (intersection.constraint == dependency.depender.constraint) {
-      // If [allowed] allows all versions of [dependency.depender], we don't
-      // need to do anything. For example, if
-      //
-      // * a [0, 1) depends on b [0, 1) (dependency)
-      // * b [0, 1) depends on a [0, 2) (in reverse)
-      //
-      // there are no changes to be made.
-      return null;
-    } else {
-      // If [allowed] allows some but not all versions of [dependency.depender],
-      // we can disallow some versions of [dependency]. For example, if
-      //
-      // * a [0, 2) depends on b [0, 1) (dependency)
-      // * b [0, 1) depends on a [0, 1) (in reverse)
-      //
-      // we can add
-      //
-      // * a [1, 2) is disallowed
-      return new Disallowed(
-          _depMinus(dependency.depender, intersection),
-          reverse.toList()..add(dependency));
-    }
-  }
-
-  void _removeDependency(Dependency dependency) {
-    assert(_dependenciesByDepender[dependency.depender.toRef()]
-        .remove(dependency));
-    assert(_dependenciesByAllowed[dependency.allowed.toRef()]
-        .remove(dependency));
-  }
-
-  void _removeIncompatibility(Incompatibility incompatibility) {
-    assert(_incompatibilities[incompatibility.dep1.toRef()]
-        .remove(incompatibility));
-    assert(_incompatibilities[incompatibility.dep2.toRef()]
-        .remove(incompatibility));
-  }
-
-  /// Enqueue [fact] to be procesed instead of the current fact.
-  ///
-  /// This adds [fact] to [_toProcess] rather than [_fromCurrent] so that the
-  /// caller can discard all the processing for the current fact and still
-  /// process [fact] next.
-  void _replaceCurrent(Fact fact) {
-    _toProcess.add(fact);
-  }
-
-  /// If [dependencies]' dependers cover all of [depender], returns the union of
-  /// their allowed constraints.
-  ///
-  /// Returns `null` if the dependencies don't cover all of [depender] or the
-  /// allowed constraints can't be merged. Assumes that [dependencies]'
-  /// dependers are all on the same package as [depender].
-  ///
-  /// For example, given:
-  ///
-  /// * a [0, 3) (depender)
-  /// * a [0, 1) depends on b [0, 1) (in dependencies)
-  /// * a [1, 2) depends on b [1, 2) (in dependencies)
-  /// * a [2, 3) depends on b [2, 3) (in dependencies)
-  /// * a [3, 4) depends on b [3, 4) (in dependencies)
-  ///
-  /// This returns:
-  ///
-  /// * b [0, 3)
-  ///
-  /// Given:
-  ///
-  /// * a [0, 3) (depender)
-  /// * a [0, 1) depends on b [0, 2) (in dependencies)
-  /// * a [2, 3) depends on b [2, 3) (in dependencies)
-  ///
-  /// This returns `null`, since [dependencies]' dependers don't fully cover
-  /// [depender].
-  PackageDep _transitiveAllowed(PackageDep depender,
-      Iterable<Dependency> dependencies) {
-    // Union all the dependencies dependers. If we have dependency information
-    // for all versions covered by [depender], we may be able to deduce a new
-    // fact.
-    var mergedDepender = _mergeDeps(dependencies.map((dependency) {
-      assert(dependency.depender.samePackage(depender));
-      return dependency.depender;
-    }));
-    if (mergedDepender == null ||
-        !mergedDepender.constraint.allowsAll(depender.constraint)) {
-      return null;
-    }
-
-    // If the dependencies cover all of [depender], try to union the allowed
-    // versions to get the narrowest possible constraint that covers all
-    // versions allowed by any selectable depender. There may be no such
-    // constraint if different dependers use [allowed] from different sources
-    // or with different descriptions.
-    return _mergeDeps(dependencies.map((dependency) => dependency.allowed));
-  }
-
-  /// If [incompatibilities]' constraints that match [allowed] cover all of
-  /// [allowed], returns the union of their non-matching constraints.
-  ///
-  /// Returns `null` if the incompatibilities don't cover all of [allowed] or
-  /// the non-matching constraints can't be merged. Assumes that
-  /// [incompatibilities] all have one constraint that matches [allowed].
-  ///
-  /// For example, given:
-  ///
-  /// * a [0, 3) (allowed)
-  /// * a [0, 1) is incompatible with b [0, 1) (in incompatibilities)
-  /// * a [1, 2) is incompatible with b [1, 2) (in incompatibilities)
-  /// * a [2, 3) is incompatible with b [2, 3) (in incompatibilities)
-  /// * a [3, 4) is incompatible with b [3, 4) (in incompatibilities)
-  ///
-  /// This returns:
-  ///
-  /// * b [0, 3)
-  ///
-  /// Given:
-  ///
-  /// * a [0, 3) (allowed)
-  /// * a [0, 1) is incompatible with b [0, 2) (in incompatibilities)
-  /// * a [2, 3) is incompatible with b [2, 3) (in incompatibilities)
-  ///
-  /// This returns `null`, since [incompatibilities]' matching constraints don't
-  /// fully cover [allowed].
-  PackageDep _transitiveIncompatible(PackageDep allowed,
-      Iterable<Incompatibility> incompatibilities) {
-    var allMatching = <PackageDep>[];
-    var allNonMatching = <PackageDep>[];
-
-    for (var incompatibility in incompatibilities) {
-      var matching = _matching(incompatibility, allowed);
-      if (!allowed.constraint.allowsAny(matching.constraint)) continue;
-      allMatching.add(matching);
-      allNonMatching.add(_nonMatching(incompatibility, allowed));
-    }
-
-    var mergedMatching = _mergeDeps(allMatching);
-    if (mergedMatching == null) return null;
-    if (!mergedMatching.constraint.allowsAll(allowed.constraint)) return null;
-
-    return _mergeDeps(allNonMatching);
-  }
-
-  /// Returns the dependency in [incompatibility] whose name matches [dep].
-  PackageDep _matching(Incompatibility incompatibility, PackageDep dep) =>
-      incompatibility.dep1.name == dep.name
-          ? incompatibility.dep1
-          : incompatibility.dep2;
-
-  /// Returns the dependency in [incompatibility] whose name doesn't match
-  /// [dep].
-  PackageDep _nonMatching(Incompatibility incompatibility, PackageDep dep) =>
-      incompatibility.dep1.name == dep.name
-          ? incompatibility.dep2
-          : incompatibility.dep1;
-
-  // Merge [deps], [_allIds]-aware to reduce gaps. `null` if the deps are
-  // incompatible source/desc.
-  PackageDep _mergeDeps(Iterable<PackageDep> deps) {
-    var list = deps.toList();
-    if (list.isEmpty) return null;
-
-    var ref = list.first.toRef();
-    for (var dep in list.skip(1)) {
-      if (!dep.samePackage(ref)) return null;
-    }
-
-    return ref.withConstraint(
-        new VersionConstraint.unionOf(list.map((dep) => dep.constraint)));
-  }
-
-  // Intersect [deps], return `null` if they aren't compatible (diff name, diff
-  // source, diff desc, or non-overlapping).
-  //
-  // Doesn't need to reduce gaps if everything's already maximized.
-  PackageDep _intersectDeps(PackageDep dep1, PackageDep dep2) {
-    if (!dep1.samePackage(dep2)) return null;
-    var intersection = dep1.constraint.intersect(dep2.constraint);
-    return intersection.isEmpty ? null : dep1.withConstraint(intersection);
-  }
-
-  // Returns packages allowed by [minuend] but not also [subtrahend]. `null` if
-  // the resulting constraint is empty.
-  PackageDep _depMinus(PackageDep minuend, PackageDep subtrahend) {
-    if (!minuend.samePackage(subtrahend)) return minuend;
-    var difference = minuend.constraint.difference(subtrahend.constraint);
-    return difference.isEmpty ? null : minuend.withConstraint(difference);
-  }
-
-  Fact _normalize(Fact fact) {
-    if (fact is Required) {
-      return new Required(_normalizeDep(fact.dep), fact.causes);
-    } else if (fact is Disallowed) {
-      return new Disallowed(_normalizeDep(fact.dep), fact.causes);
-    } else if (fact is Dependency) {
-      return new Dependency(
-          _normalizeDep(fact.depender),
-          _normalizeDep(fact.allowed),
-          fact.causes);
-    } else if (fact is Incompatibility) {
-      return new Incompatibility(
-          _normalizeDep(fact.dep1),
-          _normalizeDep(fact.dep2),
-          fact.causes);
-    } else {
-      throw "Unknown fact type $fact";
-    }
-  }
-
-  PackageDep _normalizeDep(PackageDep dep) {
-    var normalizer = _normalizers[dep.toRef()];
-
-    // Don't normalize unknown sources or deps on invalid packages, since they
-    // don't have concrete versions available.
-    //
-    // TODO: nweiz:what happens if a package depends back on the root with a
-    // weird source?
-    if (normalizer == null) return dep;
-
-    return dep.withConstraint(normalizer.normalize(dep.constraint));
-  }
+  String toStriong() => _name;
 }

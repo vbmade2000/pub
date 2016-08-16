@@ -288,6 +288,13 @@ Iterable<Pair> pairs(Iterable iter) {
   });
 }
 
+int lastIndexWhere/*<T>*/(Iterable/*<T>*/ iterable, bool test(/*=T*/ element)) {
+  for (var i = _decisions.length - 1; i >= 0; i--) {
+    if (selector(_decisions[i])) return i;
+  }
+  return null;
+}
+
 /// Given a list of filenames, returns a set of patterns that can be used to
 /// filter for those filenames.
 ///
