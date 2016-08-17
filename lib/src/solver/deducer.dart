@@ -124,7 +124,7 @@ class VersionSolver {
       return null;
     }
 
-    var id = allowed.lastWhere(dep.allows, orElse: () => null);
+    var id = allowed.firstWhere(dep.allows, orElse: () => null);
     if (id == null) _addClause(new Clause.prohibition(dep));
     return id;
   }
@@ -141,7 +141,7 @@ class VersionSolver {
   }
 
   void _selectVersion(PackageId id) {
-    // TODO: validate [id]'s SDK constraints
+    if (!_validateSdkConstraint(id)) return;
 
     _decisions.add(id);
     _decisionsByName[id.name] = id;
@@ -164,6 +164,63 @@ class VersionSolver {
     }
 
     // TODO: add clauses based on ID's dependencies
+  }
+
+  bool _validateSdkConstraint(PackageId id) {
+    var badDart = _depWhere(id, (pubspec) =>
+        !pubspec.dartSdkConstraint.allows(sdk.version));
+    if (badDart != null) _addClause(new Clause.negative(badDart));
+
+    var badFlutter = _depWhere(id, flutter.isAvailable
+        ? (pubspec) => pubspec.flutterSdkConstraint != null
+        : (pubspec) => !pubspec.flutterSdkConstraint.allows(flutter.version))
+    if (badFlutter != null) _addClause(new Clause.negative(badFlutter));
+
+    return badDart == null && badFlutter == null;
+  }
+
+  /// Returns a dep describing the range of versions adjacent to [id] for which
+  /// [test] returns `true`.
+  ///
+  /// If [test] returns false for [id]'s pubspec, this returns `null`.
+  PackageDep _depWhere(PackageId id, bool test(Pubspec pubspec)) {
+    var pubspec = _getPubspec(id);
+    if (!test(pubspec)) return null;
+
+    var ids = await cache.getVersions(id.asRef());
+    var index = binarySearch(ids, id, compare: type == SolveType.DOWNGRADE
+        ? (id1, id2) => Version.antiprioritize(id2.version, id1.version)
+        : (id1, id2) => Version.prioritize(id2.version, id1.version));
+    assert(index != -1);
+
+    // Find the smallest index contiguous with [index] that passes [test].
+    var minIndex = index;
+    while (minIndex > 0 && test(_getPubspec(ids[minIndex - 1]))) {
+      minIndex--;
+    }
+
+    // Find the first index above [index] that doesn't pass [test].
+    var indexAbove = index + 1;
+    while (indexAbove < ids.length && test(_getPubspec(ids[indexAbove]))) {
+      indexAbove++;
+    }
+
+    if (minIndex + 1 == indexAbove) {
+      return id.withConstraint(id.version);
+    } else if (indexAbove == ids.length) {
+      if (minIndex == 0) return id.withConstraint(VersionConstraint.any);
+      return id.withConstraint(new VersionRange(
+          min: ids[minIndex].version, includeMin: true));
+    } else if (minIndex == 0) {
+      return id.withConstraint(new VersionRange(max: ids[indexAbove].version));
+    } else if (ids[minIndex].version.nextBreaking == ids[indexAbove].version) {
+      return id.withConstraint(
+          new VersionConstraint.compatibleWith(ids[minIndex].version));
+    } else {
+      return id.withConstraint(new VersionRange(
+          min: ids[minIndex].version, includeMin: true,
+          max: ids[indexAbove].version));
+    }
   }
 
   /// Adds a new clause to the deducer and propagates any new information it
