@@ -235,6 +235,10 @@ class VersionSolver {
     }
   }
 
+  /// Loads and returns the pubspec for [id].
+  Future<Pubspec> _getPubspec(PackageId id) =>
+      systemCache.source(id.source).describe(id);
+
   /// Adds a new clause to the deducer and propagates any new information it
   /// adds.
   ///
