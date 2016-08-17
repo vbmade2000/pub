@@ -54,7 +54,7 @@ class VersionSolver {
 
       var id = await _versionToTry();
       if (id == null) break;
-      _selectVersion(id);
+      await _selectVersion(id);
     }
   }
 
@@ -140,8 +140,8 @@ class VersionSolver {
     return range1.compareTo(range2);
   }
 
-  void _selectVersion(PackageId id) {
-    if (!_validateSdkConstraint(id)) return;
+  Future _selectVersion(PackageId id) {
+    if (!await _validateSdkConstraint(id)) return;
 
     _decisions.add(id);
     _decisionsByName[id.name] = id;
@@ -163,10 +163,22 @@ class VersionSolver {
       if (unit is Term && !_propagateUnit(unit)) return;
     }
 
-    // TODO: add clauses based on ID's dependencies
+    var pubspec = await _getPubspec(id);
+    for (var target in pubspec.dependencies) {
+      // Find every adjacent versions of [id]'s package that depends on the same
+      // range or a sub-range of [target].
+      var depender = _depWhere(id, (pubspec) {
+        var otherTarget = pubspec.dependencies.firstWhere(
+            (dep) => dep.samePackage(target), orElse: () => null);
+        if (otherTarget == null) return false;
+        return target.constraint.allowsAll(otherTarget.constraint);
+      });
+
+      _addClause(new Clause.dependency(depender, target));
+    }
   }
 
-  bool _validateSdkConstraint(PackageId id) {
+  Future<bool> _validateSdkConstraint(PackageId id) {
     var badDart = _depWhere(id, (pubspec) =>
         !pubspec.dartSdkConstraint.allows(sdk.version));
     if (badDart != null) _addClause(new Clause.negative(badDart));
@@ -183,8 +195,8 @@ class VersionSolver {
   /// [test] returns `true`.
   ///
   /// If [test] returns false for [id]'s pubspec, this returns `null`.
-  PackageDep _depWhere(PackageId id, bool test(Pubspec pubspec)) {
-    var pubspec = _getPubspec(id);
+  Future<PackageDep> _depWhere(PackageId id, bool test(Pubspec pubspec)) async {
+    var pubspec = await _getPubspec(id);
     if (!test(pubspec)) return null;
 
     var ids = await cache.getVersions(id.asRef());
