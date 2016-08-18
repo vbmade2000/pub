@@ -12,4 +12,6 @@ class Clause {
 
   Clause.dependency(PackageDep depender, PackageDep target)
       : this([new Term.negative(depender), new Term.positive(target)]);
+
+  String toString() => terms.join(" || ");
 }

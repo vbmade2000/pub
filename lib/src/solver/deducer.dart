@@ -63,6 +63,7 @@ class VersionSolver {
 
       var id = await _versionToTry();
       if (id == null) break;
+      log.solver("Selecting $id");
       await _selectVersion(id);
     }
 
@@ -293,6 +294,7 @@ class VersionSolver {
   ///
   /// Returns `false` if adding the clause caused the solver to backjump.
   bool _addClause(Clause clause) {
+    log.solver("Adding clause $clause");
     _clauses.add(clause);
 
     for (var term in clause.terms) {
@@ -331,6 +333,7 @@ class VersionSolver {
     }
 
     if (satisfiable == null) {
+      log.solver("  new clause is unsatisfiable");
       // If none of the terms in the clause are satisfiable, we've found a
       // contradiction and we need to backtrack.
       return _contradiction;
@@ -385,6 +388,7 @@ class VersionSolver {
     while (!toPropagate.isEmpty) {
       var term = toPropagate.first;
       toPropagate.remove(term);
+      log.solver("  derived $term");
 
       var oldConstraint = _constraints[term];
       var constraint = oldConstraint == null
@@ -431,6 +435,8 @@ class VersionSolver {
     for (var id in _decisions.skip(i)) {
       _decisionsByName.remove(id.name);
     }
+
+    log.solver("Backjumping past ${_decisions[i]}");
 
     _constraints = _constraintsStack[i];
     _implications = _implicationsStack[i];

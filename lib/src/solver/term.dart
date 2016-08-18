@@ -17,4 +17,6 @@ class Term {
       other is Term &&
       other.isNegative == isNegative &&
       other.dep == dep;
+
+  String toString() => isNegative ? "not $dep" : dep.toString();
 }
