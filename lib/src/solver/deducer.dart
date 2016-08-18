@@ -317,8 +317,7 @@ class VersionSolver {
           .add(clause);
     }
 
-    if (unit is Term) return _propagateUnit(unit);
-    return true;
+    if (unit is Term) _propagateUnit(unit);
   }
 
   // Returns `null`, a [Term], or `_contradiction`.

@@ -482,7 +482,8 @@ class PackageDep extends PackageName {
   String toString() {
     if (isRoot) return "$name $constraint (root)";
     if (isMagic) return name;
-    if (source is HostedSource && source.isDefaultHost(description)) {
+    if (source is HostedSource &&
+        (source as HostedSource).isDefaultHost(description)) {
       return "$name $constraint";
     }
     return "$name $constraint from $source ($description)";
