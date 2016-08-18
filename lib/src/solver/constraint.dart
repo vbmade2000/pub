@@ -66,4 +66,8 @@ class Constraint {
       return new Constraint.negative(newDeps);
     }
   }
+
+  String toString() => isPositive
+      ? deps.single.toString()
+      : deps.map((dep) => "not ").join(" && ");
 }

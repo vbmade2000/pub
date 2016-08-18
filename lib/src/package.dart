@@ -14,6 +14,7 @@ import 'git.dart' as git;
 import 'pubspec.dart';
 import 'source_registry.dart';
 import 'source.dart';
+import 'source/hosted.dart';
 import 'utils.dart';
 
 final _README_REGEXP = new RegExp(r"^README($|\.)", caseSensitive: false);
@@ -358,12 +359,6 @@ abstract class PackageName {
         description = null,
         isMagic = true;
 
-  String toString() {
-    if (isRoot) return "$name (root)";
-    if (isMagic) return name;
-    return "$name from $source";
-  }
-
   /// Returns a [PackageRef] with this one's [name], [source], and
   /// [description].
   PackageRef toRef() => isMagic
@@ -408,6 +403,13 @@ class PackageRef extends PackageName {
   /// Creates a reference to a magic package (see [isMagic]).
   PackageRef.magic(String name)
       : super._magic(name);
+
+  String toString() {
+    if (isRoot) return "$name (root)";
+    if (isMagic) return name;
+    if (source is HostedSource && description is String) return "$name";
+    return "$name from $source";
+  }
 
   bool operator ==(other) => other is PackageRef && samePackage(other);
 }
@@ -455,6 +457,7 @@ class PackageId extends PackageName {
   String toString() {
     if (isRoot) return "$name $version (root)";
     if (isMagic) return name;
+    if (source is HostedSource) return "$name $version";
     return "$name $version from $source";
   }
 }
@@ -479,6 +482,9 @@ class PackageDep extends PackageName {
   String toString() {
     if (isRoot) return "$name $constraint (root)";
     if (isMagic) return name;
+    if (source is HostedSource && source.isDefaultHost(description)) {
+      return "$name $constraint";
+    }
     return "$name $constraint from $source ($description)";
   }
 

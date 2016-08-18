@@ -112,6 +112,9 @@ class HostedSource extends Source {
 
     return new Pair<String, String>(name, description["url"] ?? defaultUrl);
   }
+
+  bool isDefaultHost(description) =>
+      _parseDescription(description).last == defaultUrl;
 }
 
 /// The [BoundSource] for [HostedSource].

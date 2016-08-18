@@ -398,7 +398,8 @@ class VersionSolver {
       // If the new unit doesn't add any additional information to the constraint,
       // there's nothing new to propagate.
       if (constraint == oldConstraint) return true;
-      _constraints[term] = constraint;
+      log.solver("  adding constraint $constraint");
+      _constraints[term.dep.name] = constraint;
 
       for (var clause in _clausesByName[term.dep.name]) {
         var newUnit = _unitToPropagate(clause);
