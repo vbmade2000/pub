@@ -1,31 +1,33 @@
-class Constraint {
-  final bool negative;
+import '../package.dart';
+import 'term.dart';
 
-  bool get positive => !negative;
+class Constraint {
+  final bool isNegative;
+
+  bool get isPositive => !isNegative;
 
   final List<PackageDep> deps;
 
   Constraint.positive(PackageDep dep)
       : deps = new List.unmodifiable([dep]),
-        negative = false;
+        isNegative = false;
 
   Constraint.negative(Iterable<PackageDep> deps)
       : deps = new List.unmodifiable(deps),
-        negative = true {
+        isNegative = true {
     assert(deps.isNotEmpty);
     assert(deps.skip(1).every((dep) => dep.name == deps.first.name));
   }
 
-  factory Constraint.fromTerm(Term term) => term.negative
+  factory Constraint.fromTerm(Term term) => term.isNegative
       ? new Constraint.negative([term.dep])
-      : new Constraint.positive([term.dep]);
+      : new Constraint.positive(term.dep);
 
   Constraint withTerm(Term term) {
-    assert(isCompatibleWith(term));
     assert(term.dep.name == deps.first.name);
 
-    if (positive) {
-      if (term.positive) {
+    if (isPositive) {
+      if (term.isPositive) {
         assert(term.dep.samePackage(deps.single));
         var newConstraint =
             term.dep.constraint.intersect(deps.single.constraint);
@@ -39,10 +41,10 @@ class Constraint {
       } else {
         return this;
       }
-    } else if (term.positive) {
+    } else if (term.isPositive) {
       var match = deps.firstWhere((dep) => dep.samePackage(term.dep),
           orElse: () => null);
-      if (match == null) return term;
+      if (match == null) return new Constraint.positive(term.dep);
       return new Constraint.positive(term.dep.withConstraint(
           term.dep.constraint.difference(match.constraint)));
     } else {

@@ -16,7 +16,7 @@ import '../pubspec.dart';
 import '../system_cache.dart';
 import '../source_registry.dart';
 import '../utils.dart';
-import 'backtracking_solver.dart';
+import 'deducer.dart';
 import 'solve_report.dart';
 
 /// Attempts to select the best concrete versions for all of the transitive
@@ -35,8 +35,7 @@ Future<SolveResult> resolveVersions(SolveType type, SystemCache cache,
   if (useLatest == null) useLatest = [];
 
   return log.progress('Resolving dependencies', () {
-    return new BacktrackingSolver(type, cache, root, lockFile, useLatest)
-        .solve();
+    return new VersionSolver(type, cache, root).solve();
   });
 }
 

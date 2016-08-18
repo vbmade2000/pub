@@ -1,3 +1,6 @@
+import '../package.dart';
+import 'term.dart';
+
 class Clause {
   final List<Term> terms;
 

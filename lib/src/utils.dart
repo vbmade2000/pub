@@ -288,9 +288,9 @@ Iterable<Pair> pairs(Iterable iter) {
   });
 }
 
-int lastIndexWhere/*<T>*/(Iterable/*<T>*/ iterable, bool test(/*=T*/ element)) {
-  for (var i = _decisions.length - 1; i >= 0; i--) {
-    if (selector(_decisions[i])) return i;
+int lastIndexWhere/*<T>*/(List/*<T>*/ list, bool test(/*=T*/ element)) {
+  for (var i = list.length - 1; i >= 0; i--) {
+    if (test(list[i])) return i;
   }
   return null;
 }

@@ -489,6 +489,12 @@ class PackageDep extends PackageName {
   bool allows(PackageId id) =>
       samePackage(id) && constraint.allows(id.version);
 
+  bool allowsAny(PackageDep dep) =>
+      samePackage(dep) && constraint.allowsAny(dep.constraint);
+
+  bool allowsAll(PackageDep dep) =>
+      samePackage(dep) && constraint.allowsAll(dep.constraint);
+
   int get hashCode => super.hashCode ^ constraint.hashCode;
 
   bool operator ==(other) =>

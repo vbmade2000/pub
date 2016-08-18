@@ -1,18 +1,20 @@
-class Term {
-  final bool negative;
+import '../package.dart';
 
-  bool get positive => !negative;
+class Term {
+  final bool isNegative;
+
+  bool get isPositive => !isNegative;
 
   final PackageDep dep;
 
-  Term.positive(this.dep) : negative = false;
+  Term.positive(this.dep) : isNegative = false;
 
-  Term.negative(this.dep) : negative = true;
+  Term.negative(this.dep) : isNegative = true;
 
-  int get hashCode => negative.hashCode ^ dep.hashCode;
+  int get hashCode => isNegative.hashCode ^ dep.hashCode;
 
   bool operator ==(other) =>
       other is Term &&
-      other.negative == negative &&
+      other.isNegative == isNegative &&
       other.dep == dep;
 }

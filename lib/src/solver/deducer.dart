@@ -2,15 +2,22 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'dart:collection';
+import 'dart:async';
 
 import 'package:collection/collection.dart';
 import 'package:pub_semver/pub_semver.dart';
 
+import '../exceptions.dart';
+import '../flutter.dart' as flutter;
 import '../package.dart';
-import 'constraint_normalizer.dart';
-import 'deduction_failure.dart';
-import 'fact.dart';
+import '../pubspec.dart';
+import '../sdk.dart' as sdk;
+import '../system_cache.dart';
+import '../utils.dart';
+import 'clause.dart';
+import 'constraint.dart';
+import 'term.dart';
+import 'version_solver.dart';
 
 final _contradiction = new Object();
 
@@ -30,11 +37,11 @@ class VersionSolver {
 
   var _constraints = <String, Constraint>{};
 
-  final _constraintsStack = [_constraints];
+  final _constraintsStack = <Map<String, Constraint>>[];
 
   var _implications = <Term, Set<Term>>{};
 
-  final _implicationsStack = [_implications];
+  final _implicationsStack = <Map<Term, Set<Term>>>[];
 
   VersionSolver(SolveType type, SystemCache systemCache, this.root)
       : type = type,
@@ -42,7 +49,7 @@ class VersionSolver {
         cache = new SolverCache(type, systemCache);
 
   Future<SolveResult> solve() async {
-    var stopwatch = new Stopwatch..start();
+    var stopwatch = new Stopwatch()..start();
 
     for (var dep in root.immediateDependencies) {
       _addClause(new Clause.requirement(dep));
@@ -69,7 +76,7 @@ class VersionSolver {
     // Try picking packages with concrete constraints first. These are packages
     // we know we need to select to satisfy the existing selections.
     var constraint = _constraints.values
-        .firstWhere((constraint) => constraint.positive, orElse: () => null);
+        .firstWhere((constraint) => constraint.isPositive, orElse: () => null);
 
     // TODO: what if a constraint exists with an unsatisfiable dep?
     if (constraint != null) {
@@ -89,8 +96,8 @@ class VersionSolver {
         var satisfaction = _satisfaction(term);
         // If any term in a clause is satisfied, ignore that clause completely.
         if (satisfaction == _Satisfaction.satisfied) continue clauses;
-        if (satisfaction == _Satisfaction.unsatisfied) continue;
-        if (term.negative) continue;
+        if (satisfaction == _Satisfaction.unsatisfiable) continue;
+        if (term.isNegative) continue;
         if (dep != null && !term.dep.samePackage(dep)) continue;
         satisfiable = term;
       }
@@ -98,7 +105,9 @@ class VersionSolver {
 
       // Make sure we have the dep that allows the highest max version. This
       // ensures that we don't pick a lower version than absolutely necessary.
-      if (dep == null || _compareConstraintMax(dep, satisfiable.dep) < 0) {
+      if (dep == null ||
+          _compareConstraintMax(
+              dep.constraint, satisfiable.dep.constraint) < 0) {
         dep = satisfiable.dep;
       }
     }
@@ -117,8 +126,8 @@ class VersionSolver {
   Future<PackageId> _bestVersionFor(PackageDep dep) async {
     Iterable<PackageId> allowed;
     try {
-      allowed = await cache.getVersions(dep.asRef());
-    } on PackageNotFoundException catch (error) {
+      allowed = await cache.getVersions(dep.toRef());
+    } on PackageNotFoundException {
       _addClause(new Clause.prohibition(
           dep.withConstraint(VersionConstraint.any)));
       return null;
@@ -140,7 +149,7 @@ class VersionSolver {
     return range1.compareTo(range2);
   }
 
-  Future _selectVersion(PackageId id) {
+  Future _selectVersion(PackageId id) async {
     if (!await _validateSdkConstraint(id)) return;
 
     _decisions.add(id);
@@ -167,7 +176,7 @@ class VersionSolver {
     for (var target in pubspec.dependencies) {
       // Find every adjacent versions of [id]'s package that depends on the same
       // range or a sub-range of [target].
-      var depender = _depWhere(id, (pubspec) {
+      var depender = await _depWhere(id, (pubspec) {
         var otherTarget = pubspec.dependencies.firstWhere(
             (dep) => dep.samePackage(target), orElse: () => null);
         if (otherTarget == null) return false;
@@ -178,15 +187,15 @@ class VersionSolver {
     }
   }
 
-  Future<bool> _validateSdkConstraint(PackageId id) {
-    var badDart = _depWhere(id, (pubspec) =>
+  Future<bool> _validateSdkConstraint(PackageId id) async {
+    var badDart = await _depWhere(id, (pubspec) =>
         !pubspec.dartSdkConstraint.allows(sdk.version));
-    if (badDart != null) _addClause(new Clause.negative(badDart));
+    if (badDart != null) _addClause(new Clause.prohibition(badDart));
 
-    var badFlutter = _depWhere(id, flutter.isAvailable
+    var badFlutter = await _depWhere(id, flutter.isAvailable
         ? (pubspec) => pubspec.flutterSdkConstraint != null
-        : (pubspec) => !pubspec.flutterSdkConstraint.allows(flutter.version))
-    if (badFlutter != null) _addClause(new Clause.negative(badFlutter));
+        : (pubspec) => !pubspec.flutterSdkConstraint.allows(flutter.version));
+    if (badFlutter != null) _addClause(new Clause.prohibition(badFlutter));
 
     return badDart == null && badFlutter == null;
   }
@@ -199,7 +208,7 @@ class VersionSolver {
     var pubspec = await _getPubspec(id);
     if (!test(pubspec)) return null;
 
-    var ids = await cache.getVersions(id.asRef());
+    var ids = await cache.getVersions(id.toRef());
     var index = binarySearch(ids, id, compare: type == SolveType.DOWNGRADE
         ? (id1, id2) => Version.antiprioritize(id2.version, id1.version)
         : (id1, id2) => Version.prioritize(id2.version, id1.version));
@@ -207,13 +216,14 @@ class VersionSolver {
 
     // Find the smallest index contiguous with [index] that passes [test].
     var minIndex = index;
-    while (minIndex > 0 && test(_getPubspec(ids[minIndex - 1]))) {
+    while (minIndex > 0 && test(await _getPubspec(ids[minIndex - 1]))) {
       minIndex--;
     }
 
     // Find the first index above [index] that doesn't pass [test].
     var indexAbove = index + 1;
-    while (indexAbove < ids.length && test(_getPubspec(ids[indexAbove]))) {
+    while (indexAbove < ids.length &&
+        test(await _getPubspec(ids[indexAbove]))) {
       indexAbove++;
     }
 
@@ -247,13 +257,15 @@ class VersionSolver {
     _clauses.add(clause);
 
     for (var term in clause.terms) {
-      _clausesByPackage.putIfAbsent(term.dep.toRef(), () => new Set())
+      _clausesByName.putIfAbsent(term.dep.name, () => new Set())
           .add(clause);
     }
 
     var unit = _unitToPropagate(clause);
     if (unit == _contradiction) {
-      var transitiveImplicators = _transitiveImplicators(implicators);
+      // Backjump to the first explicitly-selected package that (transitively)
+      // led to this contradiction.
+      var transitiveImplicators = _transitiveImplicators(clause.terms);
       if (!_backjumpTo((id) => transitiveImplicators.contains(id.toRef()))) {
         throw "Contradiction!";
       }
@@ -271,7 +283,12 @@ class VersionSolver {
       // If this term is satisfied, then the clause is already satisfied and we
       // can't derive anything new from it.
       if (satisfaction == _Satisfaction.satisfied) return null;
-      if (satisfaction == _Satisfaction.satisfiable) satisfiable = term;
+      if (satisfaction != _Satisfaction.satisfiable) continue;
+
+      // If there are multiple satisfiable terms, we can't derive any new
+      // information from this clause.
+      if (satisfiable != null) return null;
+      satisfiable = term;
     }
 
     if (satisfiable == null) {
@@ -279,8 +296,8 @@ class VersionSolver {
       // contradiction and we need to backtrack.
       return _contradiction;
     } else {
-      _implications.putIfAbsent(unselected, () => new Set())
-          .addAll(clause.terms.where((term) => term != unselected));
+      _implications.putIfAbsent(satisfiable, () => new Set())
+          .addAll(clause.terms.where((term) => term != satisfiable));
 
       // If there's only one clause that doesn't have a selection, and all the
       // other clauses are unsatisfied, unit propagation means we have to select
@@ -290,19 +307,19 @@ class VersionSolver {
   }
 
   _Satisfaction _satisfaction(Term term) {
-    var selected = _decisionsByName[term.name];
+    var selected = _decisionsByName[term.dep.name];
     if (selected != null) {
-      return term.allows(selected) == term.positive
+      return term.dep.allows(selected) == term.isPositive
           ? _Satisfaction.satisfied
           : _Satisfaction.unsatisfiable;
     }
 
-    var constraint = _constraints[term.name];
+    var constraint = _constraints[term.dep.name];
     if (constraint == null) return _Satisfaction.satisfiable;
 
-    if (constraint.positive) {
+    if (constraint.isPositive) {
       var constraintDep = constraint.deps.single;
-      if (term.positive) {
+      if (term.isPositive) {
         if (term.dep.allowsAll(constraintDep)) return _Satisfaction.satisfied;
         if (term.dep.allowsAny(constraintDep)) return _Satisfaction.satisfiable;
         return _Satisfaction.unsatisfiable;
@@ -313,8 +330,8 @@ class VersionSolver {
       }
     } else {
       for (var dep in constraint.deps) {
-        if (constraint.dep.allowsAll(term.dep)) {
-          return term.positive
+        if (dep.allowsAll(term.dep)) {
+          return term.isPositive
               ? _Satisfaction.unsatisfiable
               : _Satisfaction.satisfied;
         }
@@ -327,7 +344,9 @@ class VersionSolver {
   bool _propagateUnit(Term unit) {
     var toPropagate = new Set.from([unit]);
     while (!toPropagate.isEmpty) {
-      var term = toPropagate.remove(toPropagate.first);
+      var term = toPropagate.first;
+      toPropagate.remove(term);
+
       var oldConstraint = _constraints[term];
       var constraint = oldConstraint == null
           ? new Constraint.fromTerm(term)
@@ -335,7 +354,7 @@ class VersionSolver {
 
       // If the new unit doesn't add any additional information to the constraint,
       // there's nothing new to propagate.
-      if (constraint == oldConstraint) return;
+      if (constraint == oldConstraint) return true;
       _constraints[term] = constraint;
 
       for (var clause in _clausesByName[term.dep.name]) {
@@ -350,8 +369,8 @@ class VersionSolver {
         // TODO: is selecting based on name right here? what about multiple
         // negations?
         var implicators = _implications[term] ?? new Set();
-        implicators.addAll(
-            clause.terms.where((clauseTerm) => clauseTerm.name != unit.name));
+        implicators.addAll(clause.terms.where(
+            (clauseTerm) => clauseTerm.dep.name != unit.dep.name));
 
         var transitiveImplicators = _transitiveImplicators(implicators);
         if (!_backjumpTo((id) => transitiveImplicators.contains(id.toRef()))) {
@@ -366,20 +385,19 @@ class VersionSolver {
   }
 
   // Returns whether or not a global contradiction has been found.
-  bool _backjumpTo(bool selector(PackageId id)) {
-    var i = lastIndexWhere(_decisions, selector);
+  bool _backjumpTo(bool test(PackageId id)) {
+    var i = lastIndexWhere(_decisions, test);
     if (i == null) return false;
 
     for (var id in _decisions.skip(i)) {
       _decisionsByName.remove(id.name);
     }
 
+    _constraints = _constraintsStack[i];
+    _implications = _implicationsStack[i];
     _decisions.removeRange(i, _decisions.length);
-    _constraintsStack.removeRange(i + 1, _constraintsStack.length);
-    _implicationsStack.removeRange(i + 1, _implicationsStack.length);
-
-    _constraints = _constraintsStack.last;
-    _implications = _implicationsStack.last;
+    _constraintsStack.removeRange(i, _constraintsStack.length);
+    _implicationsStack.removeRange(i, _implicationsStack.length);
 
     return true;
   }
@@ -388,19 +406,20 @@ class VersionSolver {
     var implicators = new Set<PackageRef>();
     var toCheck = terms.toSet();
     while (!toCheck.isEmpty) {
-      var term = toCheck.removeLast();
+      var term = toCheck.first;
+      toCheck.remove(term);
       if (!implicators.add(term.dep.toRef())) continue;
 
-      toCheck.addAll(_implications[term] ?? const []);
+      toCheck.addAll(_implications[term] ?? const [] as Iterable<Term>);
     }
     return implicators;
   }
 }
 
 class _Satisfaction {
-  static const satisfied = const _Satisfaction._(this("satisfied");
-  static const satisfiable = const _Satisfaction._(this("satisfiable");
-  static const unsatisfiable = const _Satisfaction._(this("unsatisfiable");
+  static const satisfied = const _Satisfaction._("satisfied");
+  static const satisfiable = const _Satisfaction._("satisfiable");
+  static const unsatisfiable = const _Satisfaction._("unsatisfiable");
 
   final String _name;
 
