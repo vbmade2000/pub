@@ -417,6 +417,7 @@ class VersionSolver {
         var implicators = _implications[term] ?? new Set();
         implicators.addAll(clause.terms.where(
             (clauseTerm) => clauseTerm.dep.name != unit.dep.name));
+        implicators = _simplifyTerms(implicators).toSet();
 
         log.solver("  constraint contradicts $clause");
         var transitiveImplicators = _transitiveImplicators(implicators);
@@ -427,6 +428,39 @@ class VersionSolver {
     }
 
     return true;
+  }
+
+  /// Simplifies [terms] by combining multiple terms that refer to the same
+  /// package.
+  Iterable<Term> _simplifyTerms(Iterable<Term> allTerms) {
+    var termsByName = groupBy(allTerms, (term) => term.dep.name);
+    return termsByName.values.expand((termsForName) {
+      if (termsForName.length == 1) return termsForName;
+
+      var termsByRef = groupBy(termsForName, (term) => term.dep.toRef());
+      var hasNegative = termsForName.any((term) => term.isNegative);
+
+      // If there are any negative terms in the clause, then all positive terms
+      // for different packages with the same name are irrelevant, since the
+      // positive term could only be satisfied when the negative term was
+      // already satisfied.
+      //
+      // Take "!a from path || a from hosted" for example. We can safely remove
+      // "a from hosted", since selecting any version that would satisfy it will
+      // satisfy "!a from path" anyway.
+      if (hasNegative) {
+        for (var ref in termsByRef.keys.toList()) {
+          if (termsByRef[ref].every((term) => term.isPositive)) {
+            termsByRef.remove(ref);
+          }
+        }
+      }
+
+      // If there are no positive terms, just make sure that there's only one
+      // negative term for each package.
+      return termsByRef.values.map((termsForPackage) =>
+          termsForPackage.reduce((term1, term2) => term1.or(term2)));
+    }).toList();
   }
 
   void _backjumpTo(bool test(PackageId id)) {
