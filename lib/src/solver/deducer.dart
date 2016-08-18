@@ -54,7 +54,7 @@ class VersionSolver {
     var stopwatch = new Stopwatch()..start();
 
     for (var dep in root.immediateDependencies) {
-      _addClause(new Clause.requirement(dep));
+      _addClause(new Clause.requirement(dep), "from root");
     }
 
     while (true) {
@@ -168,13 +168,16 @@ class VersionSolver {
     try {
       allowed = await cache.getVersions(dep.toRef());
     } on PackageNotFoundException {
-      _addClause(new Clause.prohibition(
-          dep.withConstraint(VersionConstraint.any)));
+      _addClause(
+          new Clause.prohibition(dep.withConstraint(VersionConstraint.any)),
+          "because the package wasn't available");
       return null;
     }
 
     var id = allowed.firstWhere(dep.allows, orElse: () => null);
-    if (id == null) _addClause(new Clause.prohibition(dep));
+    if (id == null) {
+      _addClause(new Clause.prohibition(dep), "because no versions matched");
+    }
     return id;
   }
 
@@ -293,9 +296,20 @@ class VersionSolver {
   /// Adds a new clause to the deducer and propagates any new information it
   /// adds.
   ///
-  /// Returns `false` if adding the clause caused the solver to backjump.
-  bool _addClause(Clause clause) {
-    log.solver("Adding clause $clause");
+  /// May cause a backjump.
+  void _addClause(Clause clause, [String reason]) {
+    log.solver("Adding clause $clause" + (reason == null ? "" : " $reason"));
+    var unit = _unitToPropagate(clause);
+    if (unit == _contradiction) {
+      log.solver("  new clause is unsatisfiable");
+      // Backjump to the first explicitly-selected package that (transitively)
+      // led to this contradiction.
+      var transitiveImplicators = _transitiveImplicators(clause.terms);
+      _backjumpTo((id) => transitiveImplicators.contains(id.toRef()));
+      _addClause(clause, reason);
+      return;
+    }
+
     _clauses.add(clause);
 
     for (var term in clause.terms) {
@@ -303,16 +317,6 @@ class VersionSolver {
           .add(clause);
     }
 
-    var unit = _unitToPropagate(clause);
-    if (unit == _contradiction) {
-      // Backjump to the first explicitly-selected package that (transitively)
-      // led to this contradiction.
-      var transitiveImplicators = _transitiveImplicators(clause.terms);
-      if (!_backjumpTo((id) => transitiveImplicators.contains(id.toRef()))) {
-        throw "Contradiction!";
-      }
-      return false;
-    }
     if (unit is Term) return _propagateUnit(unit);
     return true;
   }
@@ -334,7 +338,6 @@ class VersionSolver {
     }
 
     if (satisfiable == null) {
-      log.solver("  new clause is unsatisfiable");
       // If none of the terms in the clause are satisfiable, we've found a
       // contradiction and we need to backtrack.
       return _contradiction;
@@ -416,11 +419,10 @@ class VersionSolver {
         implicators.addAll(clause.terms.where(
             (clauseTerm) => clauseTerm.dep.name != unit.dep.name));
 
+        log.solver("  constraint contradicts $clause");
         var transitiveImplicators = _transitiveImplicators(implicators);
-        if (!_backjumpTo((id) => transitiveImplicators.contains(id.toRef()))) {
-          throw "Contradiction!";
-        }
-        _addClause(new Clause(implicators));
+        _backjumpTo((id) => transitiveImplicators.contains(id.toRef()));
+        _addClause(new Clause(implicators), "learned from contradiction");
         return false;
       }
     }
@@ -428,24 +430,21 @@ class VersionSolver {
     return true;
   }
 
-  // Returns whether or not a global contradiction has been found.
-  bool _backjumpTo(bool test(PackageId id)) {
+  void _backjumpTo(bool test(PackageId id)) {
     var i = lastIndexWhere(_decisions, test);
-    if (i == null) return false;
+    if (i == null) throw "Contradiction!";
 
     for (var id in _decisions.skip(i)) {
       _decisionsByName.remove(id.name);
     }
 
-    log.solver("Backjumping past ${_decisions[i]}");
+    log.solver("  backjumping past ${_decisions[i]}");
 
     _constraints = _constraintsStack[i];
     _implications = _implicationsStack[i];
     _decisions.removeRange(i, _decisions.length);
     _constraintsStack.removeRange(i, _constraintsStack.length);
     _implicationsStack.removeRange(i, _implicationsStack.length);
-
-    return true;
   }
 
   Set<PackageRef> _transitiveImplicators(Iterable<Term> terms) {
