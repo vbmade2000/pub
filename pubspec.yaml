@@ -41,6 +41,3 @@ dev_dependencies:
 
 environment:
   sdk: ">=1.11.0 <2.0.0"
-
-dependency_overrides:
-  test: {path: ../pkg/test}
