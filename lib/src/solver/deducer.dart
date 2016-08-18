@@ -9,6 +9,8 @@ import 'package:pub_semver/pub_semver.dart';
 
 import '../exceptions.dart';
 import '../flutter.dart' as flutter;
+import '../lock_file.dart';
+import '../log.dart' as log;
 import '../package.dart';
 import '../pubspec.dart';
 import '../sdk.dart' as sdk;
@@ -63,6 +65,43 @@ class VersionSolver {
       if (id == null) break;
       await _selectVersion(id);
     }
+
+    var pubspecs = <String, Pubspec>{};
+    for (var id in _decisions) {
+      pubspecs[id.name] = await _getPubspec(id);
+    }
+
+    var buffer = new StringBuffer()
+      ..writeln("Version solving took ${stopwatch.elapsed} seconds.")
+      ..writeln(cache.describeResults());
+    log.solver(buffer);
+
+    return new SolveResult.success(systemCache.sources, root,
+        new LockFile.empty(), _decisions, [], pubspecs,
+        _getAvailableVersions(_decisions), 1);
+  }
+
+  /// Generates a map containing all of the known available versions for each
+  /// package in [packages].
+  ///
+  /// The version list may not always be complete. If the package is the root
+  /// root package, or if it's a package that we didn't unlock while solving
+  /// because we weren't trying to upgrade it, we will just know the current
+  /// version.
+  Map<String, List<Version>> _getAvailableVersions(List<PackageId> packages) {
+    var availableVersions = <String, List<Version>>{};
+    for (var package in packages) {
+      var cached = cache.getCachedVersions(package.toRef());
+      // If the version list was never requested, just use the one known
+      // version.
+      var versions = cached == null
+          ? [package.version]
+          : cached.map((id) => id.version).toList();
+
+      availableVersions[package.name] = versions;
+    }
+
+    return availableVersions;
   }
 
   // Note: this may add additional clauses, which may cause a backtrack or
