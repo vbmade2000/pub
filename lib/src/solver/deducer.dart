@@ -232,9 +232,10 @@ class VersionSolver {
         !pubspec.dartSdkConstraint.allows(sdk.version));
     if (badDart != null) _addClause(new Clause.prohibition(badDart));
 
-    var badFlutter = await _depWhere(id, flutter.isAvailable
-        ? (pubspec) => pubspec.flutterSdkConstraint != null
-        : (pubspec) => !pubspec.flutterSdkConstraint.allows(flutter.version));
+    var badFlutter = await _depWhere(id, (pubspec) =>
+        pubspec.flutterSdkConstraint != null &&
+        (!flutter.isAvailable ||
+         !pubspec.flutterSdkConstraint.allows(flutter.version)));
     if (badFlutter != null) _addClause(new Clause.prohibition(badFlutter));
 
     return badDart == null && badFlutter == null;
@@ -388,9 +389,8 @@ class VersionSolver {
     while (!toPropagate.isEmpty) {
       var term = toPropagate.first;
       toPropagate.remove(term);
-      log.solver("  derived $term");
 
-      var oldConstraint = _constraints[term];
+      var oldConstraint = _constraints[term.dep.name];
       var constraint = oldConstraint == null
           ? new Constraint.fromTerm(term)
           : oldConstraint.withTerm(term);
