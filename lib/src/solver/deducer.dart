@@ -197,15 +197,15 @@ class VersionSolver {
 
     _decisions.add(id);
     _decisionsByName[id.name] = id;
-    _constraints = new Map.from(_constraints);
     _constraintsStack.add(_constraints);
+    _constraints = new Map.from(_constraints);
 
     var oldImplications = _implications;
     _implications = {};
     oldImplications.forEach((key, value) {
       _implications[key] = value.toSet();
     });
-    _implicationsStack.add(_implications);
+    _implicationsStack.add(oldImplications);
 
     _constraints.remove(id.name);
 
