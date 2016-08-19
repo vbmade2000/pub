@@ -1,3 +1,4 @@
+import '../glyph.dart' as glyph;
 import '../package.dart';
 
 class Term {
@@ -58,5 +59,5 @@ class Term {
       other.isNegative == isNegative &&
       other.dep == dep;
 
-  String toString() => isNegative ? "not $dep" : dep.toString();
+  String toString() => isNegative ? "${glyph.not}$dep" : dep.toString();
 }

@@ -8,11 +8,10 @@ import 'dart:math' as math;
 import 'package:barback/barback.dart';
 
 import '../barback/asset_environment.dart';
+import '../glyph.dart' as glyph;
 import '../log.dart' as log;
 import '../utils.dart';
 import 'barback.dart';
-
-final _arrow = getSpecial('\u2192', '=>');
 
 /// Handles the `serve` pub command.
 class ServeCommand extends BarbackCommand {
@@ -154,15 +153,17 @@ class ServeCommand extends BarbackCommand {
       if (result.isCached) {
         var prefix = "$directory ${log.green('GET')}";
         log.collapsible(
-            "$prefix ${result.url.path} $_arrow (cached) ${result.id}",
+            "$prefix ${result.url.path} ${glyph.arrow} (cached) ${result.id}",
             "$prefix Served ## cached assets.");
       } else if (result.isSuccess) {
         var prefix = "$directory ${log.green('GET')}";
-        log.collapsible("$prefix ${result.url.path} $_arrow ${result.id}",
+        log.collapsible(
+            "$prefix ${result.url.path} ${glyph.arrow} ${result.id}",
             "$prefix Served ## assets.");
       } else {
         var buffer = new StringBuffer();
-        buffer.write("$directory ${log.red('GET')} ${result.url.path} $_arrow");
+        buffer.write(
+            "$directory ${log.red('GET')} ${result.url.path} ${glyph.arrow}");
 
         var error = result.error.toString();
         if (error.contains("\n")) {

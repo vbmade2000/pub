@@ -1,3 +1,4 @@
+import '../glyph.dart' as glyph;
 import '../package.dart';
 import 'term.dart';
 
@@ -13,5 +14,5 @@ class Clause {
   Clause.dependency(PackageDep depender, PackageDep target)
       : this([new Term.negative(depender), new Term.positive(target)]);
 
-  String toString() => terms.join(" || ");
+  String toString() => terms.join(" ${glyph.or} ");
 }

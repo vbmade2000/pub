@@ -1,3 +1,4 @@
+import '../glyph.dart' as glyph;
 import '../package.dart';
 import 'term.dart';
 
@@ -69,5 +70,5 @@ class Constraint {
 
   String toString() => isPositive
       ? deps.single.toString()
-      : deps.map((dep) => "not $dep").join(" && ");
+      : deps.map((dep) => "${glyph.not}$dep").join(" ${glyph.and} ");
 }
